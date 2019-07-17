@@ -1,6 +1,0 @@
-name: phosphopedia
-channels:
-  - bioconda
-  - conda-forge
-dependencies:
-  - crux-toolkit=3.2
