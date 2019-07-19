@@ -44,3 +44,39 @@ rule comet_search:
         ; }} &> {log}
         mv crux-output/*.pep.xml {output}
         """
+
+rule percolator_correction:
+  input:
+    "comet/{dataset}/{basename}.pep.xml"
+  output:
+    target_pep_xml = "percolator/{dataset}/{basename}.target.pep.xml",
+    decoy_pep_xml = "percolator/{dataset}/{basename}.decoy.pep.xml",
+    target_tsv = "percolator/{dataset}/{basename}.target.psms.txt",
+    decoy_tsv = "percolator/{dataset}/{basename}.decoys.psms.txt",
+    weights = "percolator/{dataset}/{basename}.percolator.weights.txt"
+  log:
+    "logs/percolator/{dataset}/{basename}.log"
+  params:
+    fileroot = "{basename}"
+  conda:
+    SNAKEMAKE_DIR + "/envs/crux.yaml"
+  shadow:
+    "minimal"
+  shell:
+    """
+    {{ time \
+    crux percolator --only-psms T \
+                    --output-weights T \
+                    --fileroot {params.fileroot} \
+                    --pepxml-output T \
+                    --top-match 1 \
+                    --verbosity 40 \
+                    {input} \
+    ; }} &> {log}
+    mv crux-output/*.target.pep.xml {output.target_pep_xml}
+    mv crux-output/*.decoy.pep.xml {output.decoy_pep_xml}
+    mv crux-output/*.target.psms.txt {output.target_tsv}
+    mv crux-output/*.decoy.psms.txt {output.decoy_tsv}
+    mv crux-output/*.percolator.weights.txt {output.weights}
+    """
+
