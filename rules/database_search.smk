@@ -49,6 +49,8 @@ rule percolator_correction:
   input:
     "comet/{dataset}/{basename}.pep.xml"
   output:
+    target_mzid = "percolator/{dataset}/{basename}.target.mzid",
+    decoy_mzid = "percolator/{dataset}/{basename}.decoy.mzid",
     target_pep_xml = "percolator/{dataset}/{basename}.target.pep.xml",
     decoy_pep_xml = "percolator/{dataset}/{basename}.decoy.pep.xml",
     target_tsv = "percolator/{dataset}/{basename}.target.psms.txt",
@@ -69,10 +71,13 @@ rule percolator_correction:
                     --output-weights T \
                     --fileroot {params.fileroot} \
                     --pepxml-output T \
+                    --mzid-output T \
                     --top-match 1 \
                     --verbosity 40 \
                     {input} \
     ; }} &> {log}
+    mv crux-output/*.target.mzid {output.target_mzid}
+    mv crux-output/*.decoy.mzid {output.decoy_mzid}
     mv crux-output/*.target.pep.xml {output.target_pep_xml}
     mv crux-output/*.decoy.pep.xml {output.decoy_pep_xml}
     mv crux-output/*.target.psms.txt {output.target_tsv}
