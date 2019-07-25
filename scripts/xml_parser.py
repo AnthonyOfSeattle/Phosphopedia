@@ -4,7 +4,6 @@ from numpy import isclose
 from pyteomics.pepxml import PepXML
 from pyteomics import mass
 std_aa_mass = mass.std_aa_mass
-print(std_aa_mass)
 
 class AbstractExtractor:
     def __init__(self, score_string=None):
@@ -62,7 +61,7 @@ class PepXMLExtractor(AbstractExtractor):
 
     def _get_score(self):
         try:
-            return self.match["search_score"][self.score_string]
+            return float(self.match["search_score"][self.score_string])
         except KeyError:
             return None
 
@@ -93,7 +92,12 @@ class ModificationParser:
                  mod_masses={},
                  masses_absolute=False,
                  constant_mods=['C'], 
-                 score_string=None):
+                 score_string=None,
+                 score_threshold=None,
+                 score_higher_better=False,
+                 score_func=None):
+        self.spec_file_name = spec_file_name
+
         self.mod_data = []
         self.constant_mods = constant_mods
         if not masses_absolute:
@@ -104,8 +108,9 @@ class ModificationParser:
         assert all([self.mod_masses.get(const, 0.) > 0. for const in self.constant_mods]), \
                "All constant mods should have non-zero specified masses"
 
-        self.spec_file_name = spec_file_name
-        self.match_file_name = match_file_name
+        self.score_threshold = score_threshold
+        self.score_higher_better = score_higher_better
+        self.score_func = score_func
         if match_file_format == "pepXML":
             self.reader = PepXML(match_file_name)
             self.extractor = PepXMLExtractor(score_string)
@@ -119,28 +124,28 @@ class ModificationParser:
         return absolute_masses
 
     def extract(self):
-        self.mod_data = sorted(self.reader.map(self.extractor.extract),
-                               key=lambda e: e["scans"][0])
+        self.mod_data = [e for e in self.reader.map(self.extractor.extract) if len(e['peptides']) > 0]
+        self.mod_data = sorted(self.mod_data, key=lambda e: e["scans"][0])
 
-    
     def _correct_mass(self, res, pos, mass):
+        mod_tol = 1.5
         std_mass = std_aa_mass.get(res, np.inf)
         mod_mass = self.mod_masses.get(res, np.inf)
         nmod_mass = self.mod_masses.get('n', np.inf)
         if pos == -1 and isclose(mass, nmod_mass,
-                                 rtol=0., atol=.02):
+                                 rtol=0., atol=mod_tol):
             return (res,), (-100,), (nmod_mass,)
 
         elif pos == 1 and isclose(mass, std_mass + nmod_mass,
-                                  rtol=0., atol=.02):
+                                  rtol=0., atol=mod_tol):
             return (res,), (-100,), (nmod_mass,)
 
         elif pos == 1 and isclose(mass, mod_mass + nmod_mass,
-                                  rtol=0., atol=.02):
+                                  rtol=0., atol=mod_tol):
             return ('n', res), (-100, pos), (nmod_mass, mod_mass)
 
         elif isclose(mass, mod_mass,
-                     rtol=0., atol=.02):
+                     rtol=0., atol=mod_tol):
             return (res,), (pos,), (mod_mass,)
 
         else:
@@ -153,8 +158,18 @@ class ModificationParser:
             res = 'n' if pos == 0 else peptide[pos - 1]
             res, pos, mass = self._correct_mass(res, pos, mass)
             for p, m in zip(pos, mass):
-                mod_strings.append("{}={}".format(p if p == -100 else p-1, m))
+                mod_strings.append("{}={:.6f}".format(p if p == -100 else p-1, m))
         return ",".join(mod_strings)
+
+    def _passes_scoring(self, score):
+        if self.score_threshold is None:
+            return True
+
+        elif score is None:
+            return False
+
+        else:
+            return (self.score_threshold - score) * (-1 ** self.score_higher_better) > 0
  
     def _generate_tsv_entries(self):
         for match in self.mod_data:
@@ -162,13 +177,17 @@ class ModificationParser:
                 mod_string = self._format_mods(match['peptides'][ind],
                                                match['mod_positions'][ind],
                                                match['mod_masses'][ind])
-                if len(mod_string) == 0:
+                score = match['scores'][ind]
+                if self.score_func is not None and score is not None:
+                    score = self.score_func(score)
+
+                if len(mod_string) == 0 or not self._passes_scoring(score):
                     continue
 
                 fields = [self.spec_file_name,
                           match['scans'][ind],
                           match['charge_states'][ind],
-                          match['scores'][ind],
+                          score,
                           match['peptides'][ind],
                           mod_string]
                 yield "\t".join([str(e) for e in fields])
@@ -186,7 +205,7 @@ class ModificationParser:
                 dest.write(entry + "\n")
             
 
-parser = ModificationParser("test",
+parser = ModificationParser("09143.mzML",
                             "data/09143.target.pep.xml",
                             "pepXML",
                             mod_masses = {"n": 42.010565,
@@ -195,6 +214,9 @@ parser = ModificationParser("test",
                                           "T": 79.966331,
                                           "Y": 79.966331,
                                           "C": 57.021464},
-                            score_string="percolator_PEP")
+                            score_string="percolator_PEP",
+                            score_threshold=0.,
+                            score_higher_better=True,
+                            score_func=lambda x: 1-x)
 parser.extract()
-parser.to_tsv("./test.csv")
+parser.to_tsv("./09143.input")
