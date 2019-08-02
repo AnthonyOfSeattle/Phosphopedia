@@ -239,4 +239,4 @@ if __name__ == "__main__":
     eprint("--> Writing output...")
     analyzer.to_tsv()
     eprint("--> OpenMS-Ascore Wrapper completed on: {}".format(time.ctime()))
-    eprint("--> Total runtime: {:.2f} seconds".format(time.time() - run_start))
+    eprint("--> Total runtime: {:.1f} seconds".format(time.time() - run_start))
