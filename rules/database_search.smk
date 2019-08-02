@@ -1,3 +1,5 @@
+from itertools import chain
+
 rule raw_to_mzml:
     input:
         "raws/{dataset}/{basename}.raw"
@@ -85,3 +87,31 @@ rule percolator_correction:
     mv crux-output/*.percolator.weights.txt {output.weights}
     """
 
+def get_ascore_params(wildcards):
+    comet_kwd = SAMPLE_MANIFEST.loc[(wildcards.dataset, wildcards.basename), "comet"]
+    shared_dict = config["ascore"]["params"]["shared"]
+    unique_dict = config["ascore"]["params"][comet_kwd]
+    arg_list = ["--{} {}".format(a, v) for a, v in chain(shared_dict.items(), unique_dict.items())]
+    return " ".join(arg_list)
+
+rule ascore_localization:
+  input:
+    mzml = "mzmls/{dataset}/{basename}.mzML",
+    pep_xml = "comet/{dataset}/{basename}.pep.xml"
+  output:
+    "ascore/{dataset}/{basename}.ascore.txt"
+  log:
+    "logs/ascore/{dataset}/{basename}.log"
+  params:
+    get_ascore_params
+  conda: 
+    SNAKEMAKE_DIR + "/envs/openms.yaml"
+  shell:
+    """
+    {{ time \
+    python {SNAKEMAKE_DIR}/scripts/openms_ascore.py {params} \
+                                                    {input.mzml} \
+                                                    {input.pep_xml} \
+                                                    {output} \
+    ; }} &> {log}
+    """
