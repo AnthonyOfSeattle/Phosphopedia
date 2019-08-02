@@ -1,10 +1,77 @@
 from __future__ import print_function
 import re
+import sys
+import time
+import argparse
 from pyopenms import *
 from numpy import isclose, nan
 
+def eprint(*args, **kwargs):
+    print(*args, file=sys.stderr, **kwargs)
+
+
+class Profiler:
+    """
+    Consumes Spectra and Peptides to determine speed of analysis.
+    Will terminate when predetermined number of spectra analyzed.
+    """
+    def __init__(self, n_to_profile, dest_file):
+        self.n_to_profile = n_to_profile
+        self.n_analyzed = 0
+        self.start_time = 0
+        self.elapsed = []
+        self.n_peaks = []
+        self.n_phospho = []
+        self.n_sty = []
+        self.peptide_length = []
+        self.sequences = []
+        self.dest_file = dest_file
+    
+    def reset_time(self):
+        self.start_time = time.time()
+
+    def consume_spectrum(self, spectrum):
+        mz = spectrum.get_peaks()[0]
+        self.n_peaks.append(mz.shape[0])
+
+    def consume_peptide(self, peptide):
+        self.n_phospho.append(peptide.getSequence().toString().count("Phospho"))
+        unmodified_peptide = re.sub("\[[^A-Z]+\]", "", peptide.getSequence().toBracketString())
+        self.n_sty.append(len(re.findall("[STY]", unmodified_peptide)))
+        self.peptide_length.append(len(unmodified_peptide))
+        self.sequences.append(unmodified_peptide)
+
+    def consume(self, spectrum, peptide):
+        if self.n_to_profile > 0:
+            self.elapsed.append(time.time() - self.start_time)
+            self.consume_spectrum(spectrum)
+            self.consume_peptide(peptide)
+            self.n_analyzed += 1
+            if self.n_analyzed % self.n_to_profile == 0:
+                self.report_and_quit()
+
+    def report_and_quit(self):
+        with open(self.dest_file, "w") as dest:
+            header = "\t".join(["Sequence",
+                                "Length",
+                                "N_STY",
+                                "N_Phospho",
+                                "N_Peaks",
+                                "Elapsed_Time"])
+            dest.write(header + "\n")
+            for res in zip(self.sequences,
+                           self.peptide_length,
+                           self.n_sty,
+                           self.n_phospho,
+                           self.n_peaks,
+                           self.elapsed):
+                line = "\t".join([str(r) for r in res])
+                dest.write(line + "\n")
+        quit()
+
+
 class AscoreAnalyzer:
-    def __init__(self, spec_file, ident_file, hit_depth=1, **kwargs):
+    def __init__(self, spec_file, ident_file, out_file, hit_depth=1, n_to_profile=0, profile_file_name="profile.tsv", **kwargs):
         """
         AscoreAnalyzer provides a wrapper to load Spectra from MzML files
         and peptide identifications from Comet from pepXML files. It then
@@ -13,6 +80,18 @@ class AscoreAnalyzer:
         information when loading identifications). This class then handles
         Ascore and allows printing TSVs.
         """
+        
+        # Result properties
+        self.out_file = out_file
+        self.results = []
+
+        # Spectra/Hit matching properties
+        self.hit_depth=hit_depth
+        self.n_spectra_with_match = 0
+
+        # QC
+        self.prof = Profiler(n_to_profile, profile_file_name)
+
         # Load spectra
         exp = MSExperiment()
         MzMLFile().load(spec_file, exp)
@@ -23,7 +102,7 @@ class AscoreAnalyzer:
         self.spectra.sort(key=lambda spec: spec.getRT())
 
         # Load identifications
-        print(
+        eprint(
               """
               #################################################
               Note:
@@ -35,9 +114,10 @@ class AscoreAnalyzer:
               """
              )
         self.peptide_records = []
-        PepXMLFile().load(ident_file, [], self.peptide_records)
+        self.protein_records = []
+        PepXMLFile().load(ident_file, self.protein_records, self.peptide_records)
         self.peptide_records.sort(key=lambda pep: pep.getRT())
-
+        print(len(self.peptide_records))
         # AScore Init
         self.ascore = AScore()
         ascore_params = self.ascore.getParameters()
@@ -45,14 +125,9 @@ class AscoreAnalyzer:
             ascore_params.setValue(key, val)
         self.ascore.setParameters(ascore_params)
 
-        # Misc
-        self.results = []
-        self.hit_depth=hit_depth
-        self.n_spectra_with_match = 0
-
     def check_match_count(self):
         if self.n_spectra_with_match < len(self.peptide_records):
-            print(
+            eprint(
                 "Only {} out of {} petide records matched with spectra".format(self.n_spectra_with_match,
                                                                                len(self.peptide_records))
                  )
@@ -74,6 +149,10 @@ class AscoreAnalyzer:
         spec_ind = 0
         record_ind = 0
         while spec_ind < len(self.spectra) and record_ind < len(self.peptide_records):
+
+            # Grab the relevant statistics
+            # What are the spectrum RTs? Are they Close?
+            # Are the spectrum MZ values close?
             record_rt = self.peptide_records[record_ind].getRT()
             spec_rt = self.spectra[spec_ind].getRT()
             rt_is_close = isclose(record_rt, spec_rt, 
@@ -82,6 +161,8 @@ class AscoreAnalyzer:
                                   self.spectra[spec_ind].getPrecursors()[0].getMZ(),
                                   rtol=10e-6, atol=.0)
 
+            # If everything matches up, return hits
+            # Otherwise, increment the spectra or records to keep up
             if rt_is_close and mz_is_close:
                 for hit in self.generate_hits(self.peptide_records[record_ind]):
                     yield self.spectra[spec_ind], hit
@@ -98,25 +179,19 @@ class AscoreAnalyzer:
         self.check_match_count()
 
     def analyze(self):
-        ind = 0
         for spectrum, hit in self.generate_pairs():
             nphospho = hit.getSequence().toString().count("Phospho")
             if nphospho > 0:
+                self.prof.reset_time()
                 ascore_hit = self.ascore.compute(hit, spectrum)
                 scores = [str(ascore_hit.getMetaValue("AScore_{}".format(i))) for i in range(1, 3 + 1)]
-                self.results.insert(0, (
-                                        spectrum.getMetaValue("index"), 
-                                        ascore_hit.getSequence().toBracketString(), 
-                                        nphospho, ";".join(scores)
-                                       )
-                                   )
-                ind += 1
-                #if ind == 1000:
-                #    break
-        self.results.reverse()
+                self.results.append((spectrum.getMetaValue("index"), 
+                                     ascore_hit.getSequence().toBracketString(), 
+                                     nphospho, ";".join(scores)))
+                self.prof.consume(spectrum, hit)
 
-    def to_tsv(self, filename):
-        with open(filename, "w") as dest:
+    def to_tsv(self):
+        with open(self.out_file, "w") as dest:
             dest.write("\t".join(["Scan", "Peptide", "NPhospho", "Ascores"]))
             dest.write("\n")
             for res in self.results:
@@ -124,8 +199,44 @@ class AscoreAnalyzer:
                 dest.write("\n")
 
 if __name__ == "__main__":
-    analyzer = AscoreAnalyzer("./data/09143.mzML", "./data/09143.pep.xml",
-                              hit_depth=2, fragment_mass_tolerance=.05,
-                              max_peptide_length=40)
+    parser = argparse.ArgumentParser(
+        description="Maps OpenMS' implementation of Ascore accross Comet identifications.",
+        prog="OpenMS-Ascore Wrapper"
+    )
+    parser.add_argument("--hit_depth", default=1, type=int,
+                        help="Number of unique peptide hits to analyze per spectrum. "
+                             "May be less if not enough hits can be found.")
+    parser.add_argument("--fragment_mass_tolerance", default=.05, type=float,
+                        help="Mass tolerance for matching spectra peaks with theoretical "
+                             "peaks. In Da.")
+    parser.add_argument("--max_peptide_length", default=50, type=int,
+                        help="Maximum length peptide hit to consider.")
+    parser.add_argument("--n_to_profile", default=0, type=int,
+                        help="Number of peptides to profile for analysis time. "
+                             "Profiling only occurs if > 0.")
+    parser.add_argument("--profile_file_name", default="profile.tsv", type=str,
+                        help="Where to output profile data. Only relevant if n_to_profile > 0.")
+    parser.add_argument("spec_file", type=str,
+                        help="MS Spectra file supplied as MZML")
+    parser.add_argument("ident_file", type=str,
+                        help="Comet hits supplied as pepXML")
+    parser.add_argument("out_file", type=str,
+                        help="Destination for ascores")
+    args = vars(parser.parse_args())
+    
+    # Algorithm script
+    run_start = time.time()
+    eprint("--> OpenMS-Ascore Wrapper started on: {}".format(time.ctime()))
+
+    eprint("--> Loading MzML and pepXML files...")
+    analyzer = AscoreAnalyzer(**args)
+    eprint("--> MzML and pepXML parsing complete on: {}".format(time.ctime()))
+    
+    eprint("--> Calculating Ascores...")
     analyzer.analyze()
-    analyzer.to_tsv("./output")
+    eprint("--> Ascore calculations complete on: {}".format(time.ctime()))
+
+    eprint("--> Writing output...")
+    analyzer.to_tsv()
+    eprint("--> OpenMS-Ascore Wrapper completed on: {}".format(time.ctime()))
+    eprint("--> Total runtime: {:.2f} seconds".format(time.time() - run_start))
