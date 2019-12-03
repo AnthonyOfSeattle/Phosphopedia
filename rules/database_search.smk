@@ -1,117 +1,157 @@
-from itertools import chain
+##############################
+#                            #
+# Database search with comet #
+#                            #
+##############################
 
-rule raw_to_mzml:
+rule comet_param_builder:
     input:
-        "raws/{dataset}/{basename}.raw"
+        ancient("flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete")
     output:
-        "mzmls/{dataset}/{basename}.mzML"
-    log:
-        "logs/raw_to_mzml/{dataset}/{basename}.log"
-    conda:
-        SNAKEMAKE_DIR + "/envs/raw_parser.yaml"
-    shell:
-        """
-        {{ time \
-        ThermoRawFileParser.sh -i {input} \
-                               -b {output} \
-                               -f 2 \
-        ; }} &> {log}
-        """
+        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"
+    group:
+        "comet"
+    run:
+        ms2_analyzer = SQLiteInterface(
+                os.path.join(WORKING_DIR, "project.db")
+            ).query_samples(
+                "ms2Analyzer", "WHERE parentDataset='{}' AND sampleName='{}'".format(wildcards.parentDataset, wildcards.sampleName)
+            ).iloc[0]["ms2Analyzer"]
 
-def get_comet_param_file(wildcards):
-    comet_kwd = SAMPLE_MANIFEST.loc[(wildcards.dataset, wildcards.basename), "comet"]
-    return config["comet"]["param_file"][comet_kwd]
+        param_lines = []
+        for key, value in config["comet"]["params"].items():
+            if key == ms2_analyzer and isinstance(value, dict):
+                param_lines.extend([" = ".join([k, str(v)]) + "\n" for k,v in value.items()])
+            elif isinstance(value, dict):
+                continue
+            else:
+                param_lines.append(" = ".join([key, str(value)]) + "\n")
+
+        with open(output[0], "w") as dest:
+            dest.writelines(param_lines)
 
 rule comet_search:
     input:
-        mzml = "mzmls/{dataset}/{basename}.mzML",
-        parameter_file = get_comet_param_file,
-        ref = config["comet"]["ref"]
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
+        parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
+        ref = "config/" + config["comet"]["ref"]
     output:
-        "comet/{dataset}/{basename}.pep.xml"
-    log:
-        "logs/comet/{dataset}/{basename}.log"
+        pep_xml = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"),
+        pin = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin")
     params:
-        fileroot = "{basename}"
+        fileroot = "{sampleName}",
+        output_dir = "comet/{parentDataset}/{sampleName}"
     conda:
         SNAKEMAKE_DIR + "/envs/crux.yaml"
-    shadow:
-        "minimal"
+    benchmark:
+        "benchmarks/comet/{parentDataset}/{sampleName}.benchmark.txt"
+    group:
+        "comet"
     shell:
         """
-        {{ time \
         crux comet --parameter-file {input.parameter_file} \
                    --fileroot {params.fileroot} \
-                   {input.mzml} {input.ref} \
-        ; }} &> {log}
-        mv crux-output/*.pep.xml {output}
+                   --output-dir {params.output_dir} \
+                   --output_txtfile 0 \
+                   --output_percolatorfile 1 \
+                   --output_pepxmlfile 1 \
+                   --overwrite T \
+                   {input.mzml} {input.ref}
         """
 
-rule percolator_correction:
-  input:
-    "comet/{dataset}/{basename}.pep.xml"
-  output:
-    target_mzid = "percolator/{dataset}/{basename}.target.mzid",
-    decoy_mzid = "percolator/{dataset}/{basename}.decoy.mzid",
-    target_pep_xml = "percolator/{dataset}/{basename}.target.pep.xml",
-    decoy_pep_xml = "percolator/{dataset}/{basename}.decoy.pep.xml",
-    target_tsv = "percolator/{dataset}/{basename}.target.psms.txt",
-    decoy_tsv = "percolator/{dataset}/{basename}.decoys.psms.txt",
-    weights = "percolator/{dataset}/{basename}.percolator.weights.txt"
-  log:
-    "logs/percolator/{dataset}/{basename}.log"
-  params:
-    fileroot = "{basename}"
-  conda:
-    SNAKEMAKE_DIR + "/envs/crux.yaml"
-  shadow:
-    "minimal"
-  shell:
-    """
-    {{ time \
-    crux percolator --only-psms T \
-                    --output-weights T \
-                    --fileroot {params.fileroot} \
-                    --pepxml-output T \
-                    --mzid-output T \
-                    --top-match 1 \
-                    --verbosity 40 \
-                    {input} \
-    ; }} &> {log}
-    mv crux-output/*.target.mzid {output.target_mzid}
-    mv crux-output/*.decoy.mzid {output.decoy_mzid}
-    mv crux-output/*.target.pep.xml {output.target_pep_xml}
-    mv crux-output/*.decoy.pep.xml {output.decoy_pep_xml}
-    mv crux-output/*.target.psms.txt {output.target_tsv}
-    mv crux-output/*.decoy.psms.txt {output.decoy_tsv}
-    mv crux-output/*.percolator.weights.txt {output.weights}
-    """
+###############################
+#                             #
+# PSM scoring with Percolator #
+#                             #
+###############################
 
-def get_ascore_params(wildcards):
-    comet_kwd = SAMPLE_MANIFEST.loc[(wildcards.dataset, wildcards.basename), "comet"]
-    shared_dict = config["ascore"]["params"]["shared"]
-    unique_dict = config["ascore"]["params"][comet_kwd]
-    arg_list = ["--{} {}".format(a, v) for a, v in chain(shared_dict.items(), unique_dict.items())]
-    return " ".join(arg_list)
+rule percolator_pin_builder:
+    input:
+        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
+    output:
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.pin"
+    params:
+        drop = ["deltCn", "deltLCn"]
+    group:
+        "percolator"
+    script:
+        "scripts/clean_comet_pin_files.py"
+
+rule percolator_scoring:
+    input:
+        ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.pin")
+    output:
+        pep_xml = protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml"),
+        csv = protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt")
+    params:
+        fileroot = "{sampleName}",
+        output_dir = "percolator/{parentDataset}/{sampleName}"
+    conda:
+        SNAKEMAKE_DIR + "/envs/crux.yaml"
+    benchmark:
+        "benchmarks/percolator/{parentDataset}/{sampleName}.benchmark.txt"
+    group:
+        "percolator"
+    shell:
+        """
+        crux percolator --fileroot {params.fileroot} \
+                        --output-dir {params.output_dir} \
+                        --only-psms T \
+                        --pepxml-output T \
+                        --top-match 1 \
+                        --overwrite T \
+                        {input}
+        """
+
+############################################################
+#                                                          #
+# Localize phosphorylations in target peptides with Ascore #
+#                                                          #
+############################################################
+
+rule ascore_param_builder:
+    input:
+        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"
+    output:
+        "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params"
+    group:
+        "ascore"
+    run:
+        ms2_analyzer = SQLiteInterface(
+                os.path.join(WORKING_DIR, "project.db")
+            ).query_samples(
+                "ms2Analyzer", "WHERE parentDataset='{}' AND sampleName='{}'".format(wildcards.parentDataset, wildcards.sampleName)
+            ).iloc[0]["ms2Analyzer"]
+
+        param_lines = []
+        for key, value in config["ascore"]["params"].items():
+            if key == ms2_analyzer and isinstance(value, dict):
+                param_lines.extend([" = ".join([k, str(v)]) + "\n" for k,v in value.items()])
+            elif isinstance(value, dict):
+                continue
+            else:
+                param_lines.append(" = ".join([key, str(value)]) + "\n")
+
+        with open(output[0], "w") as dest:
+            dest.writelines(param_lines)
 
 rule ascore_localization:
-  input:
-    mzml = "mzmls/{dataset}/{basename}.mzML",
-    pep_xml = "comet/{dataset}/{basename}.pep.xml"
-  output:
-    "ascore/{dataset}/{basename}.ascore.txt"
-  log:
-    "logs/ascore/{dataset}/{basename}.log"
-  params:
-    get_ascore_params
-  conda: 
-    SNAKEMAKE_DIR + "/envs/openms.yaml"
-  shell:
-    """
-    {{ time \
-    python {SNAKEMAKE_DIR}/scripts/openms_ascore.py {params} \
-                                                    {input.mzml} \
-                                                    {input.pep_xml} \
-                                                    {output} \
-    ; }} &> {log}
-    """
+    input:
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
+        pep_xml = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml",
+        parameter_file = ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params")
+    output:
+        protected("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.txt")
+    conda: 
+        SNAKEMAKE_DIR + "/envs/ascore.yaml"
+    benchmark:
+        "benchmarks/ascore/{parentDataset}/{sampleName}.benchmark.txt"
+    group:
+        "ascore"
+    shell:
+        """
+        python -m pyascore --parameter_file {input.parameter_file} \
+                           {input.mzml} \
+                           {input.pep_xml} \
+                           {output}
+        """
