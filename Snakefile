@@ -1,53 +1,42 @@
 import os
-import pandas as pd
 from snakemake.utils import makedirs, listfiles
+include: "interfaces/sqlite_interface.py"
 
 SNAKEMAKE_DIR = os.path.dirname(workflow.snakefile)
 WORKING_DIR = os.getcwd()
+DATABASE_PATH = os.path.join(WORKING_DIR, "project.db")
 
 ##### load config #####
 configfile: "config/config.yaml"
 
-##### build manifest #####
-
-SAMPLE_MANIFEST = pd.read_csv("sample_manifest", header=0)
-#SAMPLE_MANIFEST = SAMPLE_MANIFEST.iloc[[1, 5],:]
-
-raw_files = expand("raws/{dataset}/{basename}.raw", zip,
-                    dataset=SAMPLE_MANIFEST.dataset,
-                    basename=SAMPLE_MANIFEST.basename)
-
-mzml_files = expand("mzmls/{dataset}/{basename}.mzML", zip, 
-                    dataset=SAMPLE_MANIFEST.dataset,
-                    basename=SAMPLE_MANIFEST.basename)
-
-comet_files = expand("comet/{dataset}/{basename}.pep.xml", zip,
-                     dataset=SAMPLE_MANIFEST.dataset,
-                     basename=SAMPLE_MANIFEST.basename)
-
-perc_files = expand("percolator/{dataset}/{basename}.target.pep.xml", zip,
-                     dataset=SAMPLE_MANIFEST.dataset,
-                     basename=SAMPLE_MANIFEST.basename)
-
-ascore_files = expand("ascore/{dataset}/{basename}.ascore.txt", zip,
-                      dataset=SAMPLE_MANIFEST.dataset,
-                      basename=SAMPLE_MANIFEST.basename)
-
-SAMPLE_MANIFEST = SAMPLE_MANIFEST.set_index(["dataset", "basename"])
-
 ##### target rules #####
 
+localrules: all, clean_pipeline
+
+db_interface = SQLiteInterface(DATABASE_PATH)
 rule all:
     input:
-        "qc/stats/version_0_stats.csv",
-        mzml_files,
-        comet_files,
-        perc_files,
-        #ascore_files
-        
+        expand("flags/pipeline_flags/{parentDataset}/{sampleName}.pipeline.complete", zip,
+               **db_interface.update_datasets(
+                     config["datasets"]
+                 ).query_samples(["parentDataset", "sampleName"])
+              )
+
+rule clean_pipeline:
+    input:
+        "flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete",
+        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml",
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml",
+        "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.txt"
+    output:
+        touch("flags/pipeline_flags/{parentDataset}/{sampleName}.pipeline.complete")
+    params:
+        target = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML"
+    shell:
+        """
+        if [ -f {params.target} ]; then rm {params.target}; fi
+        """
 
 ##### load rules #####
-
-include: "rules/retrieve_files.smk"
+include: "rules/preprocess_data.smk"
 include: "rules/database_search.smk"
-include: "rules/generate_report.smk"
