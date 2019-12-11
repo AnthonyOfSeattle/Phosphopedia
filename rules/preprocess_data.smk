@@ -4,7 +4,7 @@ rule promise_data:
     group:
         "preprocess"
     output:
-        touch("samples/{parentDataset}/{sampleName}/{sampleName}.promise")
+        temp(touch("samples/{parentDataset}/{sampleName}/{sampleName}.promise"))
 
 rule obtain_data:
     input:
