@@ -32,7 +32,7 @@ rule comet_param_builder:
 
 rule comet_search:
     input:
-        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
+        mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML"),
         parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
         ref = "config/" + config["comet"]["ref"]
     output:
@@ -81,8 +81,10 @@ rule percolator_scoring:
     input:
         ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.pin")
     output:
-        pep_xml = protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml"),
-        csv = protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt")
+        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml"),
+        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.pep.xml"),
+        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt"),
+        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.psms.txt")
     params:
         fileroot = "{sampleName}",
         output_dir = "percolator/{parentDataset}/{sampleName}"
@@ -138,20 +140,105 @@ rule ascore_param_builder:
 rule ascore_localization:
     input:
         mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
-        pep_xml = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml",
+        percolator_ids = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
         parameter_file = ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params")
     output:
-        protected("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.txt")
+        protected("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt")
     conda: 
         SNAKEMAKE_DIR + "/envs/ascore.yaml"
     benchmark:
-        "benchmarks/ascore/{parentDataset}/{sampleName}.benchmark.txt"
+        "benchmarks/ascore/{parentDataset}/{sampleName}.{psmLabel}.benchmark.txt"
     group:
         "ascore"
     shell:
         """
         python -m pyascore --parameter_file {input.parameter_file} \
+                           --ident_file_type percolatorTXT \
                            {input.mzml} \
-                           {input.pep_xml} \
+                           {input.percolator_ids} \
                            {output}
+        """
+
+####################################
+#                                  #
+# Write all PSM scores to database #
+#                                  #
+####################################
+
+rule write_to_database:
+    input:
+        psm_scores = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
+        localizations = "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt"
+    output:
+        touch("flags/search_flags/{parentDataset}/{sampleName}.search.{psmLabel}.write.complete")
+    run:
+        import re
+        import time
+        import numpy as np
+        import pandas as pd
+
+        localizations = pd.read_csv(input.localizations, sep="\t").set_index("Scan")
+        psm_scores = pd.read_csv(input.psm_scores, sep="\t",
+                                 usecols=["scan",
+                                          "percolator score",
+                                          "percolator q-value",
+                                          "percolator PEP"]).set_index("scan", drop=False)
+        localized_scores = psm_scores.join(localizations, how="left") #.sort_values(by="scan").join(localizations, how="left")
+        localized_scores = localized_scores[~localized_scores.PepScore.isna()]
+        print(localized_scores.head())
+        
+        def yield_mod(seq):
+            for ind, mod in enumerate(re.finditer("[A-Zn](\[[^A-Z]+\])?", seq), 1):
+                mod_mass = re.search("(?<=\[)([^A-Z]*)(?=\])", mod.group())
+                if mod_mass is not None:
+                    # Subtract 1 if the first character is an n-terminal designation
+                    yield mod.group()[0], ind - int(seq[0] == "n"), float(mod_mass.group())
+
+        def create_entries(row):
+            psm = PSM(sample_name = wildcards.sampleName,
+                      scan_number = row["scan"],
+                      psm_label = wildcards.psmLabel,
+                      base_sequence =  re.sub("[^A-Z]+", "", row["LocalizedSequence"]),
+                      psm_score = row["percolator score"],
+                      psm_qvalue = row["percolator q-value"],
+                      psm_pep = row["percolator PEP"])
+
+            phospho_scores = iter(zip(row["Ascores"].split(";"), str(row["AltSites"]).split(";")))
+
+            for mod_res, mod_ind, mod_mass in yield_mod(row["LocalizedSequence"]):
+                score = np.inf
+                alt_pos = ""
+                if np.isclose(config["ascore"]["params"]["mod_mass"], mod_mass, rtol=0, atol=1):
+                    score, alt_pos = next(phospho_scores)
+
+                psm.modifications.append(Modification(
+                    residue=mod_res,
+                    position=mod_ind, 
+                    mass=mod_mass, 
+                    localization_score=score, 
+                    alternative_positions=alt_pos
+                ))
+
+            return psm
+
+        engine = create_engine(ALCHEMY_PATH)
+        session = sessionmaker(bind=engine)()
+        entries = localized_scores.apply(create_entries, axis=1).tolist()
+        for i in map(time.sleep, np.random.uniform(0, 5, size=100)):
+            try:
+                session.add_all(localized_scores.apply(create_entries, axis=1).tolist())
+                session.commit()
+                break
+            except OperationalError:
+                session.rollback()
+
+rule finish_search:
+    input:
+        "flags/search_flags/{parentDataset}/{sampleName}.search.target.write.complete",
+        "flags/search_flags/{parentDataset}/{sampleName}.search.decoy.write.complete"
+    output:
+        touch("flags/search_flags/{parentDataset}/{sampleName}.search.complete")
+    shell:
+        """
+        rm {input[0]} {input[1]}
         """
