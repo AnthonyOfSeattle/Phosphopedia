@@ -19,9 +19,9 @@ class PSM(PhosphopediaBase):
     scan_number = Column(Integer)
     psm_label = Column(String)
     base_sequence = Column(String, index=True)
-    psm_score = Column(Numeric)
-    psm_qvalue = Column(Numeric)
-    psm_pep = Column(Numeric)
+    psm_score = Column(Numeric(asdecimal=False))
+    psm_qvalue = Column(Numeric(asdecimal=False))
+    psm_pep = Column(Numeric(asdecimal=False))
 
     def __repr__(self):
         return "<PSM(sample_name='{}', scan_number={}, psm_label='{}', base_sequence='{}')>".format(
@@ -35,8 +35,8 @@ class Modification(PhosphopediaBase):
     psm_id = Column(Integer, ForeignKey("psms.id"), primary_key=True)
     position = Column(Integer, primary_key=True)
     residue = Column(String)
-    mass = Column(Numeric)
-    localization_score = Column(Numeric)
+    mass = Column(Numeric(asdecimal=False))
+    localization_score = Column(Numeric(asdecimal=False))
     alternative_positions = Column(String)
     
     psm = relationship("PSM", back_populates="modifications")
