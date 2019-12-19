@@ -183,9 +183,8 @@ rule write_to_database:
                                           "percolator score",
                                           "percolator q-value",
                                           "percolator PEP"]).set_index("scan", drop=False)
-        localized_scores = psm_scores.join(localizations, how="left") #.sort_values(by="scan").join(localizations, how="left")
+        localized_scores = psm_scores.join(localizations, how="left") 
         localized_scores = localized_scores[~localized_scores.PepScore.isna()]
-        print(localized_scores.head())
         
         def yield_mod(seq):
             for ind, mod in enumerate(re.finditer("[A-Zn](\[[^A-Z]+\])?", seq), 1):
@@ -197,11 +196,12 @@ rule write_to_database:
         def create_entries(row):
             psm = PSM(sample_name = wildcards.sampleName,
                       scan_number = row["scan"],
-                      psm_label = wildcards.psmLabel,
+                      label = wildcards.psmLabel,
+                      sequence = row["LocalizedSequence"],
                       base_sequence =  re.sub("[^A-Z]+", "", row["LocalizedSequence"]),
-                      psm_score = row["percolator score"],
-                      psm_qvalue = row["percolator q-value"],
-                      psm_pep = row["percolator PEP"])
+                      score = row["percolator score"],
+                      qvalue = row["percolator q-value"],
+                      pep = row["percolator PEP"])
 
             phospho_scores = iter(zip(row["Ascores"].split(";"), str(row["AltSites"]).split(";")))
 
@@ -211,7 +211,7 @@ rule write_to_database:
                 if np.isclose(config["ascore"]["params"]["mod_mass"], mod_mass, rtol=0, atol=1):
                     score, alt_pos = next(phospho_scores)
 
-                psm.modifications.append(Modification(
+                psm.modifications.append(PSMModification(
                     residue=mod_res,
                     position=mod_ind, 
                     mass=mod_mass, 
