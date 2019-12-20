@@ -1,7 +1,7 @@
 import sys
 import warnings
 from multiprocessing import Process, Manager
-from sqlalchemy.exc import OperationalError, SAWarning
+from sqlalchemy.exc import OperationalError, SAWarning, IntegrityError
 from queue import Empty
 from os import getpid
 
@@ -10,6 +10,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, joinedload
 from itertools import groupby
 from numpy import inf
+import time
 
 class PSMMerger:
     def __init__(self, db_path, 
@@ -62,6 +63,7 @@ class PSMMerger:
                 alternative_positions = [int(pos) for pos in mod.alternative_positions.split(",")]
                 for pos in alternative_positions:
                     if localized_ptms[pos] > mod.localization_score and not occupied_pos.get(pos, False):
+                        mod.residue = tokenized_seq[pos - 1]
                         mod.position = pos
                         mod.localization_score = localized_ptms[pos]
 
@@ -75,6 +77,7 @@ class PSMMerger:
 
         new_peptide = Peptide(
             label = psm.label,
+            base_sequence = psm.base_sequence,
             sequence = "".join(tokenized_seq),
             score = psm.score
         )
@@ -86,10 +89,11 @@ class PSMMerger:
         best_peptide = next(peptide_group[1])
         for pep in peptide_group[1]:
             best_mods = []
-            for modl, modr in zip(best_peptide.modifications, pep.modifications):
+            for modl, modr in zip(sorted(best_peptide.modifications, key=lambda mod: (mod.residue, mod.position)), 
+                                  sorted(pep.modifications, key=lambda mod: (mod.residue, mod.position))):
                 if modl.localization_score == inf:
                     best_mods.append(modl)
-                if modl.localization_score < modr.localization_score:
+                elif modl.localization_score < modr.localization_score:
                     best_mods.append(modr)
                 elif (modl.localization_score == modr.localization_score
                       and len(modl.alternative_positions) < len(modr.alternative_positions)):
@@ -168,6 +172,19 @@ class IntegrationManager:
             except Empty:
                 break
 
+        try:
+           self.session.add_all(results)
+           self.session.commit()
+        except OperationalError:
+           raise
+           self.session.rollback()
+        except IntegrityError:
+           self.session.rollback()
+           for pep in results:
+               print(pep)
+               for mod in pep.modifications:
+                   print(mod)
+
         print("-- Got {} results --".format(len(results)))
 
     def shutdown(self):
@@ -179,7 +196,7 @@ class IntegrationManager:
         self.manager.shutdown()
 
     def run(self):
-        sequences = self.gather_sequences()[:10000]
+        sequences = self.gather_sequences()
         self.start_mergers()
 
         for batchn, ind in enumerate(range(0, len(sequences), self.batch_size)):
