@@ -11,7 +11,7 @@ from itertools import groupby
 from numpy import inf
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB
+from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update
 from sqlalchemy.orm import sessionmaker, joinedload
 
 #############################
@@ -197,6 +197,38 @@ class PeptideMapper:
         merged_psms = PeptideMapper.merge_psms(records)
         return merged_psms
 
+
+###########################
+#                         #
+# Statistical calculation # 
+#                         #
+###########################
+
+def calculate_fdr(score_array, label_array):
+    # Arguments should be sorted such that best scores come first
+    # This function is very similar to that provided by Percolator
+    qvalues = []
+
+    score_array = np.atleast_1d(score_array)
+    label_array = np.atleast_1d(label_array)
+    ntargets = np.cumsum(label_array == "target")
+    ndecoys = np.arange(1, ntargets.shape[0] + 1) - ntargets
+    qvalues = (ndecoys + 1)/ntargets
+    for ind in np.arange(qvalues.shape[0])[::-1]:
+         if ind - 1 >= 0 and score_array[ind] == score_array[ind-1]:
+             qvalues[ind - 1] = qvalues[ind]
+
+         if ind + 1 < qvalues.shape[0]:
+             qvalues[ind] = min(qvalues[ind], qvalues[ind + 1])
+
+    return qvalues
+
+##########################
+#                        #
+# Main integration class # 
+#                        #
+##########################
+
 class IntegrationManager:
     def __init__(self, temp_path, nworkers, write_buffer_size = 1e5, overwrite=True):
         self.nworkers = nworkers
@@ -235,6 +267,14 @@ class IntegrationManager:
         self.session.bulk_insert_mappings(Peptide, peptides)
         self.session.commit()
 
+    def update_peptide_fdr(self):
+        peptide_scores = self.session.query(Peptide.id, Peptide.score, Peptide.label).all()
+        peptide_scores.sort(key=lambda pep: -pep[1])
+
+        score_array = np.array([pep[1] for pep in peptide_scores])
+        label_array = np.array([pep[2] for pep in peptide_scores])
+        print(np.sum(calculate_fdr(score_array, label_array) < 0.01))
+
 if __name__ == "__main__":
     print("Finding files")
     percolator_files = glob("../../test/percolator/*/*/*.percolator.*.psms.txt")
@@ -256,3 +296,7 @@ if __name__ == "__main__":
     t0 = time.time()
     manager.map_peptides()
     print("Peptides took {} seconds".format(time.time() - t0))
+
+    t0 = time.time()
+    manager.update_peptide_fdr()
+    print("Peptide FDR update took {} seconds".format(time.time() - t0))
