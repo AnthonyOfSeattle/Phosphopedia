@@ -57,6 +57,7 @@ class SQLiteInterface:
                     fileLocation TEXT NOT NULL,
                     ms1Analyzer TEXT,
                     ms2Analyzer TEXT,
+                    errorCode TEXT,
                     parentDataset TEXT NOT NULL,
                     FOREIGN KEY(parentDataset) REFERENCES dataset(accession)
                 );
