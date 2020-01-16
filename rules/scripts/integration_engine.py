@@ -27,6 +27,7 @@ class PSM(TempBase):
     __tablename__ = "psms"
 
     hash_value = Column(Integer, index=True)
+
     id = Column(Integer, primary_key=True)
     sample_name = Column(String)
     scan_number = Column(Integer)
@@ -41,8 +42,9 @@ class Peptide(TempBase):
 
     __tablename__ = "peptides"
 
+    psm_id = Column(Integer, index=True)
+
     id = Column(Integer, primary_key=True)
-    psm_id = Column(Integer)
     label = Column(String)
     base_sequence = Column(String)
     sequence = Column(String)
@@ -50,6 +52,23 @@ class Peptide(TempBase):
     qvalue = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))
     modifications = Column(BLOB)
+
+class PSMProtein(TempBase):
+
+    __tablename__ = "psms_proteins"
+
+    prot_id = Column(String, index=True)
+
+    id = Column(Integer, primary_key=True)
+    psm_id = Column(Integer)
+
+class Protein(TempBase):
+    
+    __tablename__ = "proteins"
+
+    id = Column(Integer, primary_key=True)
+    accession = Column(String)
+    coverage = Column(Numeric(asdecimal=False))
 
 ##########################
 #                        #
@@ -66,7 +85,8 @@ class PSMMapper:
                                  usecols=["scan",
                                           "percolator score",
                                           "percolator q-value",
-                                          "percolator PEP"]).set_index("scan", drop=False)
+                                          "percolator PEP",
+                                          "protein id"]).set_index("scan", drop=False)
         localized_scores = psm_scores.join(localizations, how="left")
         localized_scores = localized_scores[~localized_scores.PepScore.isna()]
         return localized_scores
@@ -102,7 +122,8 @@ class PSMMapper:
                    score = row["percolator score"],
                    qvalue = row["percolator q-value"],
                    pep = row["percolator PEP"],
-                   modifications = pickle.dumps(mods))
+                   modifications = pickle.dumps(mods),
+                   proteins = row["protein id"].split(","))
         psm["hash_value"] = hash(psm["base_sequence"])
 
         return psm
@@ -146,7 +167,7 @@ class PeptideMapper:
         peptide_mods = {pos: dict(info) for pos, info in psm["modifications"].items()}
         for pos in list(peptide_mods.keys()):
             mod = peptide_mods.pop(pos)
-
+        
             if mod["score"] < 13:
                 for alt_pos in mod["alt_pos"]:
                     if localized_ptms.get(alt_pos, 0.) > mod["score"] and not peptide_mods.get(alt_pos, False):
@@ -198,6 +219,53 @@ class PeptideMapper:
         return merged_psms
 
 
+class ProteinCoverageAnalyzer:
+
+    @staticmethod
+    def establish_connection(db_path):
+        global SESSION
+        SESSION = sessionmaker(bind=create_engine(db_path))()
+
+    @staticmethod
+    def get_peptide_ranges(peptides, seq):
+        peptide_ranges = []
+        for upep in peptides:
+            start = seq.find(upep)
+            while start >= 0:
+                peptide_ranges.append((start, start + len(upep)))
+                start = seq.find(upep, start + 1)
+        return sorted(peptide_ranges)
+
+    @staticmethod
+    def calculate_coverage(ranges):
+        last_start = 0
+        last_end = 0
+        total_coverage = 0
+        for start, end in ranges:
+            if start >= last_end:
+                total_coverage += last_end - last_start
+                last_start = start
+            last_end = max(last_end, end)
+        total_coverage += last_end - last_start
+
+        return total_coverage
+
+    @staticmethod
+    def run(prot):
+        objects = (SESSION.query(Protein.id, Peptide.base_sequence)
+                       .join(PSMProtein, Protein.id == PSMProtein.prot_id)
+                       .join(Peptide, PSMProtein.psm_id == Peptide.psm_id)
+                       .filter(Protein.id == prot["id"])).all()
+
+        # Deal with peptide sequences and reverse if decoys
+        unique_peptides = np.unique([o[1] for o in objects])
+        if prot["acc"].startswith("decoy"):
+            unique_peptides = np.array([pep[:-1][::-1] + pep[-1] for pep in unique_peptides])
+
+        peptide_ranges = ProteinCoverageAnalyzer.get_peptide_ranges(unique_peptides, prot["seq"])
+        total_coverage = ProteinCoverageAnalyzer.calculate_coverage(peptide_ranges)
+        return prot["id"], total_coverage
+
 ###########################
 #                         #
 # Statistical calculation # 
@@ -246,8 +314,22 @@ class IntegrationManager:
         self.session = sessionmaker(bind=self.engine)()
         TempBase.metadata.create_all(self.engine)
 
+        self.prot_acc_map = {}
+
+    def extract_protein_links(self, unormalized_proteins):
+        psm_protein_links = []
+        for psm_id, protein_acc_list in unormalized_proteins:
+            for protein_acc in protein_acc_list:
+                self.prot_acc_map.setdefault(protein_acc, len(self.prot_acc_map) + 1)
+                psm_protein_links.append(
+                    dict(psm_id = psm_id, prot_id = self.prot_acc_map[protein_acc])
+                )
+
+        return psm_protein_links
+
     def map_psms(self, psm_files, localization_files):
         workers = Pool(self.nworkers)
+        n_total_psms = 0
         for ind in range(0, len(psm_files), 50):
             mapped_results = workers.map(
                 PSMMapper.run, zip(
@@ -256,8 +338,20 @@ class IntegrationManager:
                 )
             )
             psms = np.concatenate(mapped_results)
+            [p.setdefault("id", pind) for pind, p in enumerate(psms, n_total_psms + 1)]
+            n_total_psms += psms.shape[0] 
+            psm_protein_links = self.extract_protein_links(
+                [(p["id"], p.pop("proteins")) for p in psms]
+            )
+            n_total_psms += psms.shape[0]
+
             self.session.bulk_insert_mappings(PSM, psms)
+            self.session.bulk_insert_mappings(PSMProtein, psm_protein_links)
             self.session.commit()
+
+        proteins = [dict(id = prot_id, accession = acc) for acc, prot_id in self.prot_acc_map.items()]
+        self.session.bulk_insert_mappings(Protein, proteins)
+        self.session.commit()
 
     def map_peptides(self):
         hash_values = [q[0] for q in self.session.query(PSM.hash_value).distinct().all()]
@@ -267,8 +361,34 @@ class IntegrationManager:
         self.session.bulk_insert_mappings(Peptide, peptides)
         self.session.commit()
 
+    def infer_protein_coverage(self, db_file):
+        # Read in proteins
+        cur_acc = ""
+        cur_seq = ""
+        protein_sequence_map = {}
+        with open(db_file, "r") as src:
+            for line in src:
+                line = line.split()
+                if line[0][0] == ">":
+                    if cur_seq:
+                        protein_sequence_map[cur_acc] = cur_seq
+                    cur_acc = line[0].lstrip(">")
+                    cur_seq = ""
+                else:
+                    cur_seq += line[0]
+
+        protein_tuples = [dict(id = protid, acc = acc, seq = protein_sequence_map[acc.lstrip("decoy_")]) 
+                          for protid, acc in self.session.query(Protein.id, Protein.accession).all()]
+        workers = Pool(self.nworkers, ProteinCoverageAnalyzer.establish_connection, (self.db_path,))
+        mapped_results = workers.map(ProteinCoverageAnalyzer.run, protein_tuples)
+
+        for prot_id, coverage in mapped_results:
+            self.session.execute(update(Protein).where(Protein.id == prot_id).values(coverage = coverage))
+        self.session.commit()
+
     def update_peptide_fdr(self):
         peptide_scores = self.session.query(Peptide.id, Peptide.score, Peptide.label).all()
+        #peptide_scores = self.session.query(PSM.id, PSM.score, PSM.label, PSM.qvalue).all()
         peptide_scores.sort(key=lambda pep: -pep[1])
 
         score_array = np.array([pep[1] for pep in peptide_scores])
@@ -290,7 +410,7 @@ if __name__ == "__main__":
     manager = IntegrationManager(os.getenv("TMPDIR"), 8, overwrite=1)
 
     t0 = time.time()
-    manager.map_psms(percolator_files, ascore_files)
+    manager.map_psms(percolator_files[:1], ascore_files[:1])
     print("PSMs took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
@@ -298,5 +418,10 @@ if __name__ == "__main__":
     print("Peptides took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
-    manager.update_peptide_fdr()
+    db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta" 
+    manager.infer_protein_coverage(db_file)
+    print("Coverage estimation took {} seconds".format(time.time() - t0))
+
+    t0 = time.time()
+    #manager.update_peptide_fdr()
     print("Peptide FDR update took {} seconds".format(time.time() - t0))
