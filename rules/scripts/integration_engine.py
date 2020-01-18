@@ -11,7 +11,8 @@ from itertools import groupby
 from numpy import inf
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update
+from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update, delete
+from sqlalchemy.sql import text
 from sqlalchemy.orm import sessionmaker, joinedload
 
 #############################
@@ -122,8 +123,8 @@ class PSMMapper:
                    score = row["percolator score"],
                    qvalue = row["percolator q-value"],
                    pep = row["percolator PEP"],
-                   modifications = pickle.dumps(mods),
-                   proteins = row["protein id"].split(","))
+                   modifications = pickle.dumps(mods))
+        psm["proteins"] = ["|".join(seq.split("|")[:-1]) for seq in row["protein id"].split(",")]
         psm["hash_value"] = hash(psm["base_sequence"])
 
         return psm
@@ -372,7 +373,7 @@ class IntegrationManager:
                 if line[0][0] == ">":
                     if cur_seq:
                         protein_sequence_map[cur_acc] = cur_seq
-                    cur_acc = line[0].lstrip(">")
+                    cur_acc = "|".join((line[0].lstrip(">")).split("|")[:-1])
                     cur_seq = ""
                 else:
                     cur_seq += line[0]
@@ -384,6 +385,30 @@ class IntegrationManager:
 
         for prot_id, coverage in mapped_results:
             self.session.execute(update(Protein).where(Protein.id == prot_id).values(coverage = coverage))
+        self.session.commit()
+
+    def drop_low_coverage(self):
+        n_connections = self.session.query(PSMProtein).count()
+        self.session.execute(text(
+            """
+            WITH ranked_coverage AS (
+              SELECT pp.id as id, pp.psm_id as psm_id, pp.prot_id as prot_id,
+                     RANK() OVER(
+                       PARTITION BY pp.psm_id
+                       ORDER BY pro.coverage, pro.accession
+                     ) rank
+              FROM psms_proteins pp
+              LEFT JOIN proteins pro
+              ON pp.prot_id = pro.id
+              ORDER BY pp.id
+            )
+            INSERT INTO psms_proteins (psm_id, prot_id)
+            SELECT psm_id, prot_id
+            FROM ranked_coverage
+            WHERE rank = 1;
+            """
+        ))
+        self.session.execute(delete(PSMProtein).where(PSMProtein.id <= n_connections))
         self.session.commit()
 
     def update_peptide_fdr(self):
@@ -420,6 +445,7 @@ if __name__ == "__main__":
     t0 = time.time()
     db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta" 
     manager.infer_protein_coverage(db_file)
+    manager.drop_low_coverage()
     print("Coverage estimation took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
