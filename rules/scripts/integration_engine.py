@@ -43,9 +43,9 @@ class Peptide(TempBase):
 
     __tablename__ = "peptides"
 
-    psm_id = Column(Integer, index=True)
+    psm_id = Column(Integer, primary_key = True) #index=True)
 
-    id = Column(Integer, primary_key=True)
+    #id = Column(Integer, primary_key=True)
     label = Column(String)
     base_sequence = Column(String)
     sequence = Column(String)
@@ -59,9 +59,8 @@ class PSMProtein(TempBase):
     __tablename__ = "psms_proteins"
 
     prot_id = Column(String, index=True)
-
+    psm_id = Column(Integer, index=True)
     id = Column(Integer, primary_key=True)
-    psm_id = Column(Integer)
 
 class Protein(TempBase):
     
@@ -223,11 +222,6 @@ class PeptideMapper:
 class ProteinCoverageAnalyzer:
 
     @staticmethod
-    def establish_connection(db_path):
-        global SESSION
-        SESSION = sessionmaker(bind=create_engine(db_path))()
-
-    @staticmethod
     def get_peptide_ranges(peptides, seq):
         peptide_ranges = []
         for upep in peptides:
@@ -253,13 +247,8 @@ class ProteinCoverageAnalyzer:
 
     @staticmethod
     def run(prot):
-        objects = (SESSION.query(Protein.id, Peptide.base_sequence)
-                       .join(PSMProtein, Protein.id == PSMProtein.prot_id)
-                       .join(Peptide, PSMProtein.psm_id == Peptide.psm_id)
-                       .filter(Protein.id == prot["id"])).all()
-
         # Deal with peptide sequences and reverse if decoys
-        unique_peptides = np.unique([o[1] for o in objects])
+        unique_peptides = np.unique(prot['peptide_list'])
         if prot["acc"].startswith("decoy"):
             unique_peptides = np.array([pep[:-1][::-1] + pep[-1] for pep in unique_peptides])
 
@@ -377,11 +366,19 @@ class IntegrationManager:
                     cur_seq = ""
                 else:
                     cur_seq += line[0]
+            protein_sequence_map[cur_acc] = cur_seq
 
-        protein_tuples = [dict(id = protid, acc = acc, seq = protein_sequence_map[acc.lstrip("decoy_")]) 
-                          for protid, acc in self.session.query(Protein.id, Protein.accession).all()]
-        workers = Pool(self.nworkers, ProteinCoverageAnalyzer.establish_connection, (self.db_path,))
-        mapped_results = workers.map(ProteinCoverageAnalyzer.run, protein_tuples)
+        matches = (self.session.query(Protein.id, Protein.accession, Peptide.base_sequence)
+                       .join(PSMProtein, Protein.id == PSMProtein.prot_id)
+                       .join(Peptide, PSMProtein.psm_id == Peptide.psm_id)
+                       .order_by(Protein.id)).all()
+        grouped_matches = groupby(matches, lambda m : (m[0], m[1]))
+        protein_dicts = [dict(id = prot_id, acc = prot_acc, 
+                              peptide_list = [m[2] for m in match_iter], 
+                              seq = protein_sequence_map[prot_acc.lstrip("decoy_")])
+                         for (prot_id, prot_acc), match_iter in grouped_matches]
+        workers = Pool(self.nworkers)
+        mapped_results = workers.map(ProteinCoverageAnalyzer.run, protein_dicts)
 
         for prot_id, coverage in mapped_results:
             self.session.execute(update(Protein).where(Protein.id == prot_id).values(coverage = coverage))
@@ -392,7 +389,7 @@ class IntegrationManager:
         self.session.execute(text(
             """
             WITH ranked_coverage AS (
-              SELECT pp.id as id, pp.psm_id as psm_id, pp.prot_id as prot_id,
+              SELECT pp.prot_id as prot_id, pp.psm_id as psm_id,
                      RANK() OVER(
                        PARTITION BY pp.psm_id
                        ORDER BY pro.coverage, pro.accession
@@ -400,7 +397,7 @@ class IntegrationManager:
               FROM psms_proteins pp
               LEFT JOIN proteins pro
               ON pp.prot_id = pro.id
-              ORDER BY pp.id
+              ORDER BY pp.prot_id, pp.psm_id
             )
             INSERT INTO psms_proteins (psm_id, prot_id)
             SELECT psm_id, prot_id
@@ -435,7 +432,7 @@ if __name__ == "__main__":
     manager = IntegrationManager(os.getenv("TMPDIR"), 8, overwrite=1)
 
     t0 = time.time()
-    manager.map_psms(percolator_files[:1], ascore_files[:1])
+    manager.map_psms(percolator_files[:100], ascore_files[:100])
     print("PSMs took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
@@ -445,8 +442,11 @@ if __name__ == "__main__":
     t0 = time.time()
     db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta" 
     manager.infer_protein_coverage(db_file)
-    manager.drop_low_coverage()
     print("Coverage estimation took {} seconds".format(time.time() - t0))
+
+    t0 = time.time()
+    manager.drop_low_coverage()
+    print("High coverage selection took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
     #manager.update_peptide_fdr()
