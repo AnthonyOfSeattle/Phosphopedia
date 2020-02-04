@@ -11,7 +11,7 @@ from itertools import groupby
 from numpy import inf
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update, delete
+from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update, delete, func
 from sqlalchemy.sql import text
 from sqlalchemy.orm import sessionmaker, joinedload
 
@@ -265,7 +265,8 @@ class ProteinCoverageAnalyzer:
 
         peptide_ranges = ProteinCoverageAnalyzer.get_peptide_ranges(unique_peptides, prot["seq"])
         total_coverage = ProteinCoverageAnalyzer.calculate_coverage(peptide_ranges)
-        return prot["id"], total_coverage
+        covered_proportion = total_coverage / len(prot["seq"])
+        return prot["id"], covered_proportion
 
 
 class ModificationMapper:
@@ -395,6 +396,8 @@ class IntegrationManager:
              if prot["accession"].startswith("decoy_"):
                  prot["label"] = "decoy"
                  prot["accession"] = prot["accession"].lstrip("decoy_")
+             else:
+                 prot["label"] = "target"
 
         self.session.bulk_insert_mappings(Protein, proteins)
         self.session.commit()
@@ -442,9 +445,19 @@ class IntegrationManager:
 
         workers = Pool(self.nworkers)
         mapped_results = workers.map(ProteinCoverageAnalyzer.run, protein_dicts)
+        update_dict = {prot_id : coverage for prot_id, coverage in mapped_results}
 
-        for prot_id, coverage in mapped_results:
-            self.session.execute(update(Protein).where(Protein.id == prot_id).values(coverage = coverage))
+        max_prot_id = self.session.query(func.max(Protein.id)).all()[0][0]
+        for chunk in range(0, max_prot_id, 1000):
+            prot_objects = (self.session.query(Protein)
+                               .filter(Protein.id.between(chunk, chunk + 1000))
+                               .all())
+
+            for prot in prot_objects:
+                prot.coverage = update_dict[prot.id]
+
+            self.session.flush()
+
         self.session.commit()
 
     def drop_low_coverage(self):
@@ -504,13 +517,53 @@ class IntegrationManager:
 
 
     def update_peptide_fdr(self):
-        peptide_scores = self.session.query(Peptide.id, Peptide.score, Peptide.label).all()
-        #peptide_scores = self.session.query(PSM.id, PSM.score, PSM.label, PSM.qvalue).all()
+        peptide_scores = self.session.query(Peptide.psm_id, Peptide.score, Peptide.label).all()
         peptide_scores.sort(key=lambda pep: -pep[1])
 
         score_array = np.array([pep[1] for pep in peptide_scores])
         label_array = np.array([pep[2] for pep in peptide_scores])
-        print(np.sum(calculate_fdr(score_array, label_array) < 0.01))
+        fdr_array = calculate_fdr(score_array, label_array)
+        update_dict = {pep[0] : fdr for pep, fdr in zip(peptide_scores, fdr_array)}
+
+        max_psm_id = self.session.query(func.max(Peptide.psm_id)).all()[0][0]
+        for chunk in range(0, max_psm_id, 1000):
+            pep_objects = (self.session.query(Peptide)
+                               .filter(Peptide.psm_id.between(chunk, chunk + 1000))
+                               .all())
+
+            for pep in pep_objects:
+                pep.qvalue = update_dict[pep.psm_id]
+
+            self.session.flush()
+
+        self.session.commit()
+
+    def update_ptm_fdr(self):
+        ptm_scores = (self.session.query(PTM.prot_id, 
+                                         PTM.position, 
+                                         PTM.score,
+                                         Protein.label)
+                          .join(Protein, PTM.prot_id == Protein.id)).all()
+        ptm_scores.sort(key=lambda ptm: -ptm[2])
+
+        score_array = np.array([ptm[2] for ptm in ptm_scores])
+        label_array = np.array([ptm[3] for ptm in ptm_scores])
+        fdr_array = calculate_fdr(score_array, label_array)
+        update_dict = {(ptm[0], ptm[1]) : fdr for ptm, fdr in zip(ptm_scores, fdr_array)}
+        
+        max_prot_id = self.session.query(func.max(PTM.prot_id)).all()[0][0]
+        for chunk in range(0, max_prot_id, 1000):
+            ptm_objects = (self.session.query(PTM)
+                               .filter(PTM.prot_id.between(chunk, chunk + 1000))
+                               .all()
+            )
+
+            for ptm in ptm_objects:
+                ptm.qvalue = update_dict[(ptm.prot_id, ptm.position)]
+
+            self.session.flush()
+
+        self.session.commit()
 
 if __name__ == "__main__":
     print("Finding files")
@@ -527,7 +580,7 @@ if __name__ == "__main__":
     manager = IntegrationManager(os.getenv("TMPDIR"), 8, overwrite=1)
 
     t0 = time.time()
-    manager.map_psms(percolator_files[:10], ascore_files[:10])
+    manager.map_psms(percolator_files[:100], ascore_files[:100])
     print("PSMs took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
@@ -549,6 +602,10 @@ if __name__ == "__main__":
     manager.map_modifications()
     print("Modifications took {} seconds".format(time.time() - t0))
 
-    #t0 = time.time()
-    #manager.update_peptide_fdr()
-    #print("Peptide FDR update took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.update_peptide_fdr()
+    print("Peptide FDR update took {} seconds".format(time.time() - t0))
+
+    t0 = time.time()
+    manager.update_ptm_fdr()
+    print("PTM FDR update took {} seconds".format(time.time() - t0))
