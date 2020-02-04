@@ -43,9 +43,7 @@ class Peptide(TempBase):
 
     __tablename__ = "peptides"
 
-    psm_id = Column(Integer, primary_key = True) #index=True)
-
-    #id = Column(Integer, primary_key=True)
+    psm_id = Column(Integer, primary_key = True)
     label = Column(String)
     base_sequence = Column(String)
     sequence = Column(String)
