@@ -37,6 +37,7 @@ class PSM(TempBase):
     score = Column(Numeric(asdecimal=False))
     qvalue = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))
+    pep_id = Column(Integer) 
     modifications = Column(BLOB)
 
 class Peptide(TempBase):
@@ -199,11 +200,15 @@ class PeptideMapper:
 
     @staticmethod
     def collapse_peptides(peptide_group):
+        psm_ids = []
         best_peptide = next(peptide_group[1])
+        psm_ids.append(best_peptide["psm_id"])
         for pep in peptide_group[1]:
+            psm_ids.append(pep["psm_id"])
             if pep["score"] > best_peptide["score"]:
                 best_peptide = pep
 
+        best_peptide["psm_ids"] = psm_ids
         return best_peptide
 
     @staticmethod
@@ -370,7 +375,7 @@ class IntegrationManager:
     def map_psms(self, psm_files, localization_files):
         workers = Pool(self.nworkers)
         n_total_psms = 0
-        for ind in range(0, len(psm_files), 50):
+        for ind in range(0, len(psm_files), 100):
             mapped_results = workers.map(
                 PSMMapper.run, zip(
                     psm_files[ind:min(len(psm_files), ind + 50)], 
@@ -405,6 +410,24 @@ class IntegrationManager:
         workers = Pool(self.nworkers, PeptideMapper.establish_connection, (self.db_path,))
         mapped_results = workers.map(PeptideMapper.run, hash_values)
         peptides = np.concatenate(mapped_results)
+        
+        psm_to_pep = {}
+        for pep in peptides:
+            for psm_id in pep.pop("psm_ids"):
+                psm_to_pep[psm_id] = pep["psm_id"]
+
+        max_psm_id = self.session.query(func.max(PSM.id)).all()[0][0]
+        for chunk in range(0, max_psm_id, 1000):
+            psm_objects = (self.session.query(PSM)
+                               .filter(PSM.id.between(chunk, chunk + 1000))
+                               .all()
+            )
+
+            for psm in psm_objects:
+                psm.pep_id = psm_to_pep[psm.id]
+
+            self.session.flush()
+
         self.session.bulk_insert_mappings(Peptide, peptides)
         self.session.commit()
 
@@ -585,25 +608,25 @@ if __name__ == "__main__":
     manager.map_peptides()
     print("Peptides took {} seconds".format(time.time() - t0))
 
-    db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta"
-    manager.read_in_fasta(db_file)
+   # db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta"
+   # manager.read_in_fasta(db_file)
 
-    t0 = time.time()
-    manager.infer_protein_coverage()
-    print("Coverage estimation took {} seconds".format(time.time() - t0))
+   # t0 = time.time()
+   # manager.infer_protein_coverage()
+   # print("Coverage estimation took {} seconds".format(time.time() - t0))
 
-    t0 = time.time()
-    manager.drop_low_coverage()
-    print("High coverage selection took {} seconds".format(time.time() - t0))
+   # t0 = time.time()
+   # manager.drop_low_coverage()
+   # print("High coverage selection took {} seconds".format(time.time() - t0))
 
-    t0 = time.time()
-    manager.map_modifications()
-    print("Modifications took {} seconds".format(time.time() - t0))
+   # t0 = time.time()
+   # manager.map_modifications()
+   # print("Modifications took {} seconds".format(time.time() - t0))
 
-    t0 = time.time()
-    manager.update_peptide_fdr()
-    print("Peptide FDR update took {} seconds".format(time.time() - t0))
+   # t0 = time.time()
+   # manager.update_peptide_fdr()
+   # print("Peptide FDR update took {} seconds".format(time.time() - t0))
 
-    t0 = time.time()
-    manager.update_ptm_fdr()
-    print("PTM FDR update took {} seconds".format(time.time() - t0))
+   # t0 = time.time()
+   # manager.update_ptm_fdr()
+   # print("PTM FDR update took {} seconds".format(time.time() - t0))
