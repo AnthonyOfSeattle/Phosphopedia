@@ -11,7 +11,7 @@ from itertools import groupby
 from numpy import inf
 
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update, delete, func
+from sqlalchemy import create_engine, Column, Integer, Numeric, String, JSON, BLOB, update, delete, func, and_
 from sqlalchemy.sql import text
 from sqlalchemy.orm import sessionmaker, joinedload
 
@@ -37,8 +37,14 @@ class PSM(TempBase):
     score = Column(Numeric(asdecimal=False))
     qvalue = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))
-    pep_id = Column(Integer) 
     modifications = Column(BLOB)
+
+class PSMPeptide(TempBase):
+
+    __tablename__ = "psms_peptides"
+
+    psm_id = Column(Integer, primary_key=True)
+    pep_id = Column(Integer, primary_key=True)
 
 class Peptide(TempBase):
 
@@ -220,9 +226,7 @@ class PeptideMapper:
         return list(map(PeptideMapper.collapse_peptides, peptide_groups))
 
     @staticmethod
-    def run(key):
-        objects = SESSION.query(PSM).filter(PSM.hash_value == key).all()
-        records = [o.__dict__ for o in objects] 
+    def run(records): #key):
         for r in records:
             r["modifications"] = pickle.loads(r["modifications"])
 
@@ -230,6 +234,7 @@ class PeptideMapper:
             print("Hash collision!")
 
         merged_psms = PeptideMapper.merge_psms(records)
+
         return merged_psms
 
 
@@ -354,6 +359,7 @@ class IntegrationManager:
 
         self.write_buffer_size = write_buffer_size
         self.db_path = "sqlite:///" + os.path.join(self.temp_path, "psm.db")
+        self.db_path = "sqlite://"
         self.engine = create_engine(self.db_path)
         self.session = sessionmaker(bind=self.engine)()
         TempBase.metadata.create_all(self.engine)
@@ -375,7 +381,7 @@ class IntegrationManager:
     def map_psms(self, psm_files, localization_files):
         workers = Pool(self.nworkers)
         n_total_psms = 0
-        for ind in range(0, len(psm_files), 100):
+        for ind in range(0, len(psm_files), 250):
             mapped_results = workers.map(
                 PSMMapper.run, zip(
                     psm_files[ind:min(len(psm_files), ind + 50)], 
@@ -406,28 +412,32 @@ class IntegrationManager:
         self.session.commit()
 
     def map_peptides(self):
-        hash_values = [q[0] for q in self.session.query(PSM.hash_value).distinct().all()]
+        chunk_size = int(1e4)
+        mapped_results = []
         workers = Pool(self.nworkers, PeptideMapper.establish_connection, (self.db_path,))
-        mapped_results = workers.map(PeptideMapper.run, hash_values)
+        hash_values = [q[0] for q in self.session.query(PSM.hash_value).distinct().order_by(PSM.hash_value).all()]
+        for chunk in range(0, len(hash_values), chunk_size):
+            # Query a chunk of psms
+            lower_bound = hash_values[chunk]
+            upper_bound = hash_values[min(chunk + chunk_size - 1, len(hash_values) - 1)]
+            psm_objects = self.session.query(PSM).filter(
+                and_(PSM.hash_value >= lower_bound, PSM.hash_value <= upper_bound)
+            ).order_by(PSM.hash_value).all()
+            psms = [p.__dict__ for p in psm_objects]
+
+            # Group psms and analyze
+            psms = [list(group) for key, group in groupby(psms, key = lambda p : p["hash_value"])]
+            mapped_results.extend(workers.map(PeptideMapper.run, psms))
+
+        # Flush peptides 
         peptides = np.concatenate(mapped_results)
-        
-        psm_to_pep = {}
+        psm_to_pep = []
         for pep in peptides:
             for psm_id in pep.pop("psm_ids"):
-                psm_to_pep[psm_id] = pep["psm_id"]
+                psm_to_pep.append({"pep_id": pep["psm_id"],
+                                   "psm_id": psm_id})
 
-        max_psm_id = self.session.query(func.max(PSM.id)).all()[0][0]
-        for chunk in range(0, max_psm_id, 1000):
-            psm_objects = (self.session.query(PSM)
-                               .filter(PSM.id.between(chunk, chunk + 1000))
-                               .all()
-            )
-
-            for psm in psm_objects:
-                psm.pep_id = psm_to_pep[psm.id]
-
-            self.session.flush()
-
+        self.session.bulk_insert_mappings(PSMPeptide, psm_to_pep)
         self.session.bulk_insert_mappings(Peptide, peptides)
         self.session.commit()
 
@@ -586,47 +596,140 @@ class IntegrationManager:
 
         self.session.commit()
 
+    def dump(self, path = ""):
+        ptm_score_threshold = self.session.query(func.min(PTM.score)).filter(PTM.qvalue <= 0.01).all()[0][0]
+
+        # Dump psms
+        psm_list = (self.session.query(PSM.id,
+                                       PSM.sample_name,
+                                       PSM.scan_number,
+                                       PSM.score,
+                                       PSMPeptide.pep_id)
+                        .join(PSMPeptide, PSM.id == PSMPeptide.psm_id)
+                        .filter(and_(PSM.label == 'target', PSM.score > ptm_score_threshold))
+                   ).all()
+
+        psm_list = [",".join([str(e) for e in psm]) + "\n" for psm in psm_list]
+        with open(os.path.join(path, "psms.csv"), 'w') as dest:
+            dest.write(",".join(["id", "sample_name", "scan_number", "score", "pep_id"]) + "\n")
+            dest.writelines(psm_list)
+
+        # Dump peptides and associated PTMs
+        # The setup here allows PTMs to be associated at the peptide level
+        pep_mod_list = (self.session.query(Peptide.psm_id,
+                                           Peptide.sequence,
+                                           Peptide.score,
+                                           Peptide.modifications)
+                            .filter(and_(Peptide.label == 'target', Peptide.score > ptm_score_threshold))
+                        ).all()
+
+        pep_list = []
+        mod_list = []
+        for entry in pep_mod_list:
+            pep_list.append(entry[:-1])
+            mod = pickle.loads(entry[-1])
+            for pos, info in mod.items():
+                mod_list.append((entry[0], pos, info["score"], info["residue"], info["mass"]))
+
+        pep_list = [",".join([str(e) for e in pep]) + "\n" for pep in pep_list]
+        with open(os.path.join(path, "peptides.csv"), 'w') as dest:
+            dest.write(",".join(["id", "sequence", "score"]) + "\n")
+            dest.writelines(pep_list)
+
+        mod_list = [",".join([str(e) for e in mod]) + "\n" for mod in mod_list]
+        with open(os.path.join(path, "peptide_modifications.csv"), 'w') as dest:
+            dest.write(",".join(["pep_id", "pos", "score", "residue", "mass"]) + "\n")
+            dest.writelines(mod_list)
+
+        # Dump peptide to protein links
+        junction_list = (self.session.query(PSMProtein.psm_id,
+                                            PSMProtein.prot_id)
+                            .join(Peptide, PSMProtein.psm_id == Peptide.psm_id)
+                            .filter(and_(Peptide.label == 'target', Peptide.score > ptm_score_threshold))
+                        ).all()
+
+        junction_list = [",".join([str(e) for e in link]) + "\n" for link in junction_list]
+        with open(os.path.join(path, "peptide_protein.csv"), 'w') as dest:
+            dest.write(",".join(["pep_id", "prot_id"]) + "\n")
+            dest.writelines(junction_list)
+
+        # Dump proteins
+        prot_list = (self.session.query(Protein.id,
+                                        Protein.accession)
+                         .join(PTM, Protein.id == PTM.prot_id)
+                         .filter(and_(Protein.label == 'target', PTM.score > ptm_score_threshold))
+                         .group_by(Protein.id, Protein.accession)
+                   ).all()
+
+        prot_list = [",".join([str(e) for e in prot]) + "\n" for prot in prot_list]
+        with open(os.path.join(path, "proteins.csv"), 'w') as dest:
+            dest.write(",".join(["id", "accession"]) + "\n")
+            dest.writelines(prot_list)
+
+        # Dump modified sites
+        site_list = (self.session.query(PTM.prot_id,
+                                        PTM.position,
+                                        PTM.score)
+                         .join(Protein, PTM.prot_id == Protein.id)
+                         .filter(and_(Protein.label == 'target', PTM.score > ptm_score_threshold))
+                   ).all()
+
+        site_list = [",".join([str(e) for e in site]) + "\n" for site in site_list]
+        with open(os.path.join(path, "sites.csv"), 'w') as dest:
+            dest.write(",".join(["prot_id", "position", "score"]) + "\n")
+            dest.writelines(site_list)
+
+
+
 if __name__ == "__main__":
     print("Finding files")
-    percolator_files = glob("../../test/percolator/*/*/*.percolator.*.psms.txt")
+    percolator_files = glob("../../data/percolator/*/*/*.percolator.*.psms.txt")
     percolator_files.sort(
         key=lambda path: (os.path.split(path)[1].split(".")[0], os.path.split(path)[1].split(".")[2])
     )
-    ascore_files = glob("../../test/ascore/*/*/*.ascore.*.txt")
+    percolator_files = [f for f in percolator_files if "PXD015943" not in f]
+
+    ascore_files = glob("../../data/ascore/*/*/*.ascore.*.txt")
     ascore_files.sort(
         key=lambda path: (os.path.split(path)[1].split(".")[0], os.path.split(path)[1].split(".")[2])
     )
+    ascore_files = [f for f in ascore_files if "PXD015943" not in f]
 
     print("Processing")
-    manager = IntegrationManager(os.getenv("TMPDIR"), 8, overwrite=1)
+    manager = IntegrationManager(os.getenv("TMPDIR"), 16, overwrite=1)
 
     t0 = time.time()
-    manager.map_psms(percolator_files[:100], ascore_files[:100])
+    manager.map_psms(percolator_files, ascore_files)
     print("PSMs took {} seconds".format(time.time() - t0))
 
     t0 = time.time()
     manager.map_peptides()
     print("Peptides took {} seconds".format(time.time() - t0))
 
-   # db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta"
-   # manager.read_in_fasta(db_file)
+    db_file = "../../test/config/sp_iso_HUMAN_4.9.2015_UP000005640.fasta"
+    manager.read_in_fasta(db_file)
 
-   # t0 = time.time()
-   # manager.infer_protein_coverage()
-   # print("Coverage estimation took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.infer_protein_coverage()
+    print("Coverage estimation took {} seconds".format(time.time() - t0))
 
-   # t0 = time.time()
-   # manager.drop_low_coverage()
-   # print("High coverage selection took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.drop_low_coverage()
+    print("High coverage selection took {} seconds".format(time.time() - t0))
 
-   # t0 = time.time()
-   # manager.map_modifications()
-   # print("Modifications took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.map_modifications()
+    print("Modifications took {} seconds".format(time.time() - t0))
 
-   # t0 = time.time()
-   # manager.update_peptide_fdr()
-   # print("Peptide FDR update took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.update_peptide_fdr()
+    print("Peptide FDR update took {} seconds".format(time.time() - t0))
 
-   # t0 = time.time()
-   # manager.update_ptm_fdr()
-   # print("PTM FDR update took {} seconds".format(time.time() - t0))
+    t0 = time.time()
+    manager.update_ptm_fdr()
+    print("PTM FDR update took {} seconds".format(time.time() - t0))
+
+    t0 = time.time()
+    manager.dump("tmp")
+    print("Dump took {} seconds".format(time.time() - t0))
+
