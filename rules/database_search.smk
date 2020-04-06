@@ -6,7 +6,7 @@
 
 rule comet_param_builder:
     input:
-        ancient("flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete")
+        ancient("flags/preprocess_flags/preprocess.complete")
     output:
         "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"
     group:
@@ -32,11 +32,11 @@ rule comet_param_builder:
 
 rule comet_search:
     input:
-        mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML"),
-        parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
+        parameter_file = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params",
         ref = "config/" + config["comet"]["ref"]
     output:
-        pep_xml = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"),
+        #pep_xml = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"),
         pin = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin")
     params:
         fileroot = "{sampleName}",
@@ -54,7 +54,7 @@ rule comet_search:
                    --output-dir {params.output_dir} \
                    --output_txtfile 0 \
                    --output_percolatorfile 1 \
-                   --output_pepxmlfile 1 \
+                   --output_pepxmlfile 0 \
                    --overwrite T \
                    {input.mzml} {input.ref}
         """
@@ -113,7 +113,7 @@ rule percolator_scoring:
 
 rule ascore_param_builder:
     input:
-        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt"
     output:
         "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params"
     group:
