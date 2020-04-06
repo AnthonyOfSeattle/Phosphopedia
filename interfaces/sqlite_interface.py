@@ -4,6 +4,8 @@ import re
 import sqlite3
 import urllib3
 import json
+import time
+import numpy as np
 import pandas as pd
 
 class SQLiteInterface:
@@ -223,8 +225,14 @@ class SQLiteInterface:
                     SET {} = {}
                     {};
                     """.format(column_name, new_value, where_clause)
-        self.cursor.execute(statement)
-        self.connection.commit()
+
+        for i in map(time.sleep, np.random.uniform(0, 5, size=100)):
+            try:
+                self.cursor.execute(statement)
+                self.connection.commit()
+                break
+            except sqlite3.OperationalError:
+                self.connection.rollback()
 
     def query_samples(self, column_names, where_clause=''):
 
