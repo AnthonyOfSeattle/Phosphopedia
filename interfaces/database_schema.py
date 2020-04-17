@@ -4,6 +4,76 @@ from sqlalchemy.orm import relationship
 
 PhosphopediaBase = declarative_base()
 
+##########################
+#                        #
+# Sample metadata tables #
+#                        #
+##########################
+
+class Dataset(PhosphopediaBase):
+
+    __tablename__ = "dataset"
+
+    accession = Column(String(9), primary_key=True)
+    title = Column(String)
+
+    def __repr__(self):
+        title_print_len = min(len(self.title), 25)
+        return "<Dataset(accession='{}', title='{}')>".format(
+            self.accession, self.title[:title_print_len]
+        )
+    
+class Sample(PhosphopediaBase):
+
+    __tablename__ = "sample"
+
+    id = Column(Integer, primary_key=True)
+    accession = Column(String(9), ForeignKey("dataset.accession"))
+    sampleName = Column(String)
+    fileName = Column(String)
+    fileSize = Column(Integer)
+    fileLocation = Column(String)
+
+    parent_dataset = relationship("Dataset", back_populates="samples")
+
+    def __repr__(self):
+        return "<Sample(id={}, sampleName='{}', fileName='{}')>".format(
+            self.id, self.sampleName, self.fileName
+        )
+
+Dataset.samples = relationship("Sample", order_by=Sample.id, back_populates="parent_dataset")
+
+class Parameter(PhosphopediaBase):
+
+    __tablename__ = "Parameter"
+
+    sampleId = Column(Integer, primary_key=True)
+    ms1Analyzer = Column(String(10))
+    ms2Analyzer = Column(String(10))
+
+    def __repr__(self):
+        return "<Parameter(sampleId={}, ms1Analyzer='{}', ms2Analyzer='{}')>".format(
+            self.sampleId, self.ms1Analyzer, self.ms2Analyzer
+        )
+
+class Error(PhosphopediaBase):
+
+    __tablename__ = "error"
+
+    sampleId = Column(Integer, primary_key=True)
+    errorCode = Column(String(10), primary_key=True)
+
+    def __repr__(self):
+        return "<Error(sampleId={}, errorCode='{}')>".format(
+            self.sampleId, self.errorCode
+        )
+
+#########################
+#                       #
+# Identification tables #
+#                       #
+#########################
+
 class IdentificationMixin:
     id = Column(Integer, primary_key=True)
     label = Column(String)
