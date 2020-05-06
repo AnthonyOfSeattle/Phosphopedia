@@ -28,24 +28,22 @@ class Sample(PhosphopediaBase):
     __tablename__ = "sample"
 
     id = Column(Integer, primary_key=True)
-    accession = Column(String(9), ForeignKey("dataset.accession"))
+    parentDataset = Column(String(9), ForeignKey("dataset.accession"))
     sampleName = Column(String)
     fileName = Column(String)
     fileSize = Column(Integer)
     fileLocation = Column(String)
-
-    parent_dataset = relationship("Dataset", back_populates="samples")
 
     def __repr__(self):
         return "<Sample(id={}, sampleName='{}', fileName='{}')>".format(
             self.id, self.sampleName, self.fileName
         )
 
-Dataset.samples = relationship("Sample", order_by=Sample.id, back_populates="parent_dataset")
+Dataset.samples = relationship("Sample", order_by=Sample.id)
 
-class Parameter(PhosphopediaBase):
+class Parameters(PhosphopediaBase):
 
-    __tablename__ = "Parameter"
+    __tablename__ = "parameters"
 
     sampleId = Column(Integer, primary_key=True)
     ms1Analyzer = Column(String(10))

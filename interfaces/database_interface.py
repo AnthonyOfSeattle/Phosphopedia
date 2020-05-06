@@ -4,6 +4,8 @@ import glob
 import urllib3
 import json
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.pool import NullPool
+from sqlalchemy.orm import scoped_session
 from database_schema import *
 
 class DatabaseInterface:
@@ -11,11 +13,11 @@ class DatabaseInterface:
         self.database_path = database_path
 
     def __get_engine(self):
-        return create_engine(self.database_path)
+        return create_engine(self.database_path, poolclass=NullPool)
 
     def __get_session(self):
-        Session = sessionmaker(bind=self.__get_engine())
-        return Session()
+        Session = scoped_session(sessionmaker(bind=self.__get_engine()))
+        return Session
 
     def __get_pride_dataset(self, dataset, include_string):
         http = urllib3.PoolManager()
@@ -44,7 +46,7 @@ class DatabaseInterface:
             if re.search(include_string, sample["fileName"]) is not None:
                dataset_entry.samples.append(
                    Sample(
-                       accession = dataset_entry.accession,
+                       parentDataset = dataset_entry.accession,
                        sampleName = os.path.splitext(sample["fileName"])[0],
                        fileName = sample["fileName"],
                        fileSize = sample["fileSize"],
@@ -59,6 +61,8 @@ class DatabaseInterface:
         except DatabaseError:
             session.rollback()
             print("==> DatabaseError caused {} not to be added".format(dataset)) 
+        finally:
+            session.close()
 
     def __get_local_dataset(self, dataset_path):
         # Check if data is in database by name
@@ -85,7 +89,7 @@ class DatabaseInterface:
         for sample in sample_list:
             dataset_entry.samples.append(
                 Sample(
-                    accession = dataset_entry.accession,
+                    parentDataset = dataset_entry.accession,
                     sampleName = os.path.splitext(os.path.split(sample)[1])[0],
                     fileName = os.path.split(sample)[1],
                     fileSize = os.stat(sample).st_size,
@@ -101,15 +105,18 @@ class DatabaseInterface:
             session.rollback()
             print("==> DatabaseError caused {} not to be added".format(dataset_title))
             raise
+        finally:
+            session.close()
          
     def initialize_database(self):
-        try:
-            PhosphopediaBase.metadata.create_all(
-                self.__get_engine()
-            )
-        except OperationalError:
-            print("Database locked, ignoring initialization check.")
- 
+        with self.__get_engine().connect() as connection:
+            try:
+                PhosphopediaBase.metadata.create_all(
+                    connection
+                )
+            except OperationalError:
+                print("Database locked, ignoring initialization check.")
+
     def update_datasets(self, dataset_list):
         for dataset in dataset_list:
             if isinstance(dataset, list):
@@ -124,3 +131,89 @@ class DatabaseInterface:
                 self.__get_local_dataset(dataset)
             else:
                 raise ValueError("{} is not a directory or proteome exchange id".format(dataset))
+
+    def get_sample_manifest(self):
+        session = self.__get_session()
+        query = session.query(Sample.id,
+                                           Sample.sampleName,
+                                           Sample.parentDataset).\
+                                     outerjoin(Error, Sample.id == Error.sampleId).\
+                                     filter(Error.errorCode == None)
+
+        q = query.all()
+        session.remove()
+        return pd.DataFrame(
+            q, columns = ["id", "sampleName", "parentDataset"]
+        )
+
+    def get_sample(self, sample_id = None, sample_name = None):
+        session = self.__get_session()
+        query = session.query(Sample)
+
+        if sample_id is not None:
+            query = query.filter(Sample.id == sample_id)
+
+        elif sample_name is not None:
+            query = query.filter(Sample.sampleName == sample_name)
+
+        else:
+            raise ValueError("Input sample id or name")
+
+        q = query.one()
+        session.remove()
+        return q
+
+    def get_sample_params(self, sample_id = None, sample_name = None):
+        session = self.__get_session()
+        if sample_id is None and sample_name is not None:
+            query = session.query(Sample.id).filter(Sample.sampleName == sample_name)
+            sample_id = query.one()[0]
+
+        elif sample_id is None and sample_name is None:
+            raise ValueError("Input sample id or name")
+
+        params = session.query(Parameters).filter(Parameters.sampleId == sample_id).one()
+        session.remove()
+        return params
+
+    def add_sample_params(self, sample_id = None, sample_name = None, 
+                          ms1_analyzer = None, ms2_analyzer = None):
+        session = self.__get_session()
+        if sample_id is None and sample_name is not None:
+            query = session.query(Sample.id).filter(Sample.sampleName == sample_name)
+            sample_id = query.one()[0]
+
+        elif sample_id is None and sample_name is None:
+            raise ValueError("Input sample id or name")
+
+        try:
+            params = session.query(Parameters).filter(Parameters.sampleId == sample_id).one()
+            params.ms1Analyzer = ms1_analyzer if ms1_analyzer is not None else params.ms1Analyzer
+            params.ms2Analyzer = ms2_analyzer if ms2_analyzer is not None else params.ms2Analyzer
+        except Exception as e:
+            print(e)
+            params = Parameters(sampleId = sample_id,
+                                ms1Analyzer = ms1_analyzer,
+                                ms2Analyzer = ms2_analyzer)
+
+        session.add(params)
+        session.commit()
+        session.remove()
+ 
+
+    def add_error(self, sample_id = None, sample_name = None, error_code = None):
+        session = self.__get_session()
+        if sample_id is None and sample_name is not None:
+            query = session.query(Sample.id).filter(Sample.sampleName == sample_name)
+            sample_id = query.one()[0]
+
+        elif sample_id is None and sample_name is None:
+            raise ValueError("Input sample id or name")
+
+        error = Error(sampleId = sample_id,
+                      errorCode = error_code)
+
+        session.add(error)
+        session.commit()
+        session.remove()
+
