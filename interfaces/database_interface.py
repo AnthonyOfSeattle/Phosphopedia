@@ -25,6 +25,7 @@ class DatabaseInterface:
 
         if session.query(Dataset).filter(Dataset.accession == dataset).count():
             print("==> {} already present in database, so it was ignored".format(dataset))
+            session.remove()
             return
 
         # Issue GET request to PRIDE for dataset meta
@@ -62,7 +63,7 @@ class DatabaseInterface:
             session.rollback()
             print("==> DatabaseError caused {} not to be added".format(dataset)) 
         finally:
-            session.close()
+            session.remove()
 
     def __get_local_dataset(self, dataset_path):
         # Check if data is in database by name
@@ -70,6 +71,7 @@ class DatabaseInterface:
         dataset_title = os.path.split(dataset_path)[1]
         if session.query(Dataset).filter(Dataset.title == dataset_title).count():
            print("==> {} already present in database, so it was ignored".format(dataset_title))
+           session.remove()
            return
 
         n_previous_local = session.query(Dataset).filter(Dataset.accession.like("LOC%")).count()
@@ -106,7 +108,7 @@ class DatabaseInterface:
             print("==> DatabaseError caused {} not to be added".format(dataset_title))
             raise
         finally:
-            session.close()
+            session.remove()
          
     def initialize_database(self):
         with self.__get_engine().connect() as connection:
