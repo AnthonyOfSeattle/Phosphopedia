@@ -1,5 +1,6 @@
 import os
 import re
+import time
 import glob
 import urllib3
 import json
@@ -7,6 +8,37 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.pool import NullPool
 from sqlalchemy.orm import scoped_session
 from database_schema import *
+
+SAFE_QUERY_ITERS = 1000
+
+def safe_get_all(query):
+    for i in map(time.sleep, np.random.uniform(0, 5, size=SAFE_QUERY_ITERS)):
+        try:
+            result = query.all()
+            break
+        except OperationalError:
+            continue
+
+    return result
+
+def safe_get_one(query):
+    for i in map(time.sleep, np.random.uniform(0, 5, size=SAFE_QUERY_ITERS)):
+        try:
+            result = query.one()
+            break
+        except OperationalError:
+            continue
+    
+    return result
+
+def safe_update(session, obj):
+    for i in map(time.sleep, np.random.uniform(0, 5, size=SAFE_QUERY_ITERS)):
+        try:
+            session.add(obj)
+            session.commit()
+            break
+        except OperationalError:
+            session.rollback()
 
 class DatabaseInterface:
     def __init__(self, database_path):
@@ -142,7 +174,7 @@ class DatabaseInterface:
                                      outerjoin(Error, Sample.id == Error.sampleId).\
                                      filter(Error.errorCode == None)
 
-        q = query.all()
+        q = safe_get_all(query)
         session.remove()
         return pd.DataFrame(
             q, columns = ["id", "sampleName", "parentDataset"]
@@ -161,7 +193,7 @@ class DatabaseInterface:
         else:
             raise ValueError("Input sample id or name")
 
-        q = query.one()
+        q = safe_get_one(query)
         session.remove()
         return q
 
@@ -178,18 +210,40 @@ class DatabaseInterface:
         session.remove()
         return params
 
+    def __safe_get_one(self, query):
+        for i in map(time.sleep, np.random.uniform(0, 5, size=SAFE_QUERY_ITERS)):
+            try:
+                result = query.one()
+                break
+            except OperationalError:
+                continue
+
+        return result
+
+    def __safe_update(self, obj):
+        session = self.__get_session()
+        for i in map(time.sleep, np.random.uniform(0, 5, size=SAFE_QUERY_ITERS)):
+            try:
+                session.add(obj)
+                session.commit()
+                break
+            except OperationalError:
+                session.rollback()
+
+        session.remove()
+
     def add_sample_params(self, sample_id = None, sample_name = None, 
                           ms1_analyzer = None, ms2_analyzer = None):
         session = self.__get_session()
         if sample_id is None and sample_name is not None:
             query = session.query(Sample.id).filter(Sample.sampleName == sample_name)
-            sample_id = query.one()[0]
+            sample_id = self.__safe_get_one(query)[0]
 
         elif sample_id is None and sample_name is None:
             raise ValueError("Input sample id or name")
 
         try:
-            params = session.query(Parameters).filter(Parameters.sampleId == sample_id).one()
+            params = self.__safe_get_one(session.query(Parameters).filter(Parameters.sampleId == sample_id))
             params.ms1Analyzer = ms1_analyzer if ms1_analyzer is not None else params.ms1Analyzer
             params.ms2Analyzer = ms2_analyzer if ms2_analyzer is not None else params.ms2Analyzer
         except Exception as e:
@@ -198,8 +252,7 @@ class DatabaseInterface:
                                 ms1Analyzer = ms1_analyzer,
                                 ms2Analyzer = ms2_analyzer)
 
-        session.add(params)
-        session.commit()
+        safe_update(session, params)
         session.remove()
  
 
@@ -207,7 +260,7 @@ class DatabaseInterface:
         session = self.__get_session()
         if sample_id is None and sample_name is not None:
             query = session.query(Sample.id).filter(Sample.sampleName == sample_name)
-            sample_id = query.one()[0]
+            sample_id = self.__safe_get_one(query)[0]
 
         elif sample_id is None and sample_name is None:
             raise ValueError("Input sample id or name")
@@ -215,7 +268,6 @@ class DatabaseInterface:
         error = Error(sampleId = sample_id,
                       errorCode = error_code)
 
-        session.add(error)
-        session.commit()
+        safe_update(session, error)
         session.remove()
 
