@@ -1,21 +1,21 @@
-rule promise_data:
-    input:
-        ancient("project.db")
-    group:
-        "preprocess"
+checkpoint update_database:
     output:
-        temp(touch("samples/{parentDataset}/{sampleName}/{sampleName}.promise"))
+        touch("flags/database_flags/database_updated.flag")
+    run:
+        database = DatabaseInterface(DATABASE_PATH)
+        database.initialize_database()
+        database.update_datasets(
+            config["datasets"]
+        )
 
 rule obtain_data:
     input:
-        ancient("samples/{parentDataset}/{sampleName}/{sampleName}.promise")
+        ancient("flags/database_flags/database_updated.flag")
     output:
         "samples/{parentDataset}/{sampleName}/{sampleName}.raw"
     params:
         prefix = lambda wildcards: wildcards.parentDataset[:3],
-        location = lambda wildcards : DB_INTERFACE.query_samples(
-            "fileLocation", "WHERE parentDataset='{}' AND sampleName='{}'".format(wildcards.parentDataset, wildcards.sampleName)
-        ).iloc[0]["fileLocation"],
+        location = lambda wildcards : DatabaseInterface(DATABASE_PATH).get_sample(sample_name = wildcards.sampleName).fileLocation,
         download_error = "samples/{parentDataset}/{sampleName}/download.error"
     group:
         "preprocess"
@@ -59,14 +59,7 @@ rule raw_to_mzml:
         &> {log}
         """
 
-def update_errorcode(sample_name):
-    interface = SQLiteInterface(
-            os.path.join(WORKING_DIR, "project.db")
-        )
-    interface.update_samples("errorCode", "'PreprocessError'",
-                             "WHERE sampleName='{}'".format(sample_name))
-
-def update_mass_analyzer(input_file, sample_name):
+def update_mass_analyzer(input_file, sample_name, database):
     from pyteomics.mzml import MzML
 
     mz = MzML(input_file)
@@ -84,13 +77,9 @@ def update_mass_analyzer(input_file, sample_name):
         if ms1_analyzer and ms2_analyzer:
             break
 
-    interface = SQLiteInterface(
-        os.path.join(WORKING_DIR, "project.db")
-    )
-    interface.update_samples("ms1Analyzer", "'{}'".format(ms1_analyzer),
-                             "WHERE sampleName='{}'".format(sample_name))
-    interface.update_samples("ms2Analyzer", "'{}'".format(ms2_analyzer),
-                             "WHERE sampleName='{}'".format(sample_name))
+    database.add_sample_params(sample_name = sample_name,
+                               ms1_analyzer = ms1_analyzer,
+                               ms2_analyzer = ms2_analyzer)
 
 rule file_checks:
     input:
@@ -104,16 +93,21 @@ rule file_checks:
         "preprocess"
     run:
         import os
+        database = DatabaseInterface(DATABASE_PATH)
         if os.path.isfile(params.download_error) or os.path.isfile(params.conversion_error):
-            update_errorcode(wildcards.sampleName)
+            database.add_error(sample_name = wildcards.sampleName, error_code = "preprocessError")
         else:
-            update_mass_analyzer(input[0], wildcards.sampleName)
+            update_mass_analyzer(input[0], wildcards.sampleName, database)
+
+def evaluate_samples_to_preprocess(wildcards):
+    checkpoints.update_database.get(**wildcards)
+    return expand(
+        "flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete",
+        zip, **DatabaseInterface(DATABASE_PATH).get_sample_manifest() #.sample(100, random_state = 0)
+    )
 
 checkpoint finalize_preprocessing:
     input:
-        expand(
-            "flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete", zip,
-            **generate_sample_manifest()
-        )
+        evaluate_samples_to_preprocess
     output:
         touch("flags/preprocess_flags/preprocess.complete")
