@@ -6,21 +6,19 @@
 
 rule comet_param_builder:
     input:
-        ancient("flags/preprocess_flags/preprocess.complete")
+        "flags/preprocess_flags/preprocess.complete"
     output:
         "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"
     group:
         "comet"
     run:
-        ms2_analyzer = SQLiteInterface(
-                os.path.join(WORKING_DIR, "project.db")
-            ).query_samples(
-                "ms2Analyzer", "WHERE parentDataset='{}' AND sampleName='{}'".format(wildcards.parentDataset, wildcards.sampleName)
-            ).iloc[0]["ms2Analyzer"]
+        params = DatabaseInterface(DATABASE_PATH).get_sample_params(
+            sample_name = wildcards.sampleName
+        )
 
         param_lines = []
         for key, value in config["comet"]["params"].items():
-            if key == ms2_analyzer and isinstance(value, dict):
+            if key == params.ms2Analyzer and isinstance(value, dict):
                 param_lines.extend([" = ".join([k, str(v)]) + "\n" for k,v in value.items()])
             elif isinstance(value, dict):
                 continue
@@ -33,11 +31,10 @@ rule comet_param_builder:
 rule comet_search:
     input:
         mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
-        parameter_file = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params",
+        parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
         ref = "config/" + config["comet"]["ref"]
     output:
-        #pep_xml = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pep.xml"),
-        pin = protected("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin")
+        pin = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
     params:
         fileroot = "{sampleName}",
         output_dir = "comet/{parentDataset}/{sampleName}"
@@ -59,11 +56,13 @@ rule comet_search:
                    {input.mzml} {input.ref}
         """
 
+
 ###############################
 #                             #
 # PSM scoring with Percolator #
 #                             #
 ###############################
+
 
 rule percolator_pin_builder:
     input:
@@ -71,7 +70,7 @@ rule percolator_pin_builder:
     output:
         "percolator/{parentDataset}/{sampleName}/{sampleName}.pin"
     params:
-        drop = ["deltCn", "deltLCn"]
+        drop = config.get("percolator_pin_builder", dict(drop=[]))["drop"]
     group:
         "percolator"
     script:
@@ -81,10 +80,10 @@ rule percolator_scoring:
     input:
         ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.pin")
     output:
-        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml"),
-        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.pep.xml"),
-        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt"),
-        protected("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.psms.txt")
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml",
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.pep.xml",
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt",
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.psms.txt"
     params:
         fileroot = "{sampleName}",
         output_dir = "percolator/{parentDataset}/{sampleName}"
@@ -105,11 +104,13 @@ rule percolator_scoring:
                         {input}
         """
 
+
 ############################################################
 #                                                          #
 # Localize phosphorylations in target peptides with Ascore #
 #                                                          #
 ############################################################
+
 
 rule ascore_param_builder:
     input:
@@ -119,15 +120,13 @@ rule ascore_param_builder:
     group:
         "ascore"
     run:
-        ms2_analyzer = SQLiteInterface(
-                os.path.join(WORKING_DIR, "project.db")
-            ).query_samples(
-                "ms2Analyzer", "WHERE parentDataset='{}' AND sampleName='{}'".format(wildcards.parentDataset, wildcards.sampleName)
-            ).iloc[0]["ms2Analyzer"]
+        params = DatabaseInterface(DATABASE_PATH).get_sample_params(
+            sample_name = wildcards.sampleName
+        )
 
         param_lines = []
         for key, value in config["ascore"]["params"].items():
-            if key == ms2_analyzer and isinstance(value, dict):
+            if key == params.ms2Analyzer and isinstance(value, dict):
                 param_lines.extend([" = ".join([k, str(v)]) + "\n" for k,v in value.items()])
             elif isinstance(value, dict):
                 continue
@@ -143,8 +142,8 @@ rule ascore_localization:
         percolator_ids = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
         parameter_file = ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params")
     output:
-        protected("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt")
-    conda: 
+        "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt"
+    conda:
         SNAKEMAKE_DIR + "/envs/ascore.yaml"
     benchmark:
         "benchmarks/ascore/{parentDataset}/{sampleName}.{psmLabel}.benchmark.txt"
@@ -159,86 +158,39 @@ rule ascore_localization:
                            {output}
         """
 
-####################################
-#                                  #
-# Write all PSM scores to database #
-#                                  #
-####################################
 
-rule write_to_database:
+###########################################
+#                                         #
+# Write output state to finalize searches #
+#                                         #
+###########################################
+
+
+rule clean_search:
     input:
-        psm_scores = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
-        localizations = "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt"
-    output:
-        touch("flags/search_flags/{parentDataset}/{sampleName}.search.{psmLabel}.write.complete")
-    run:
-        import re
-        import time
-        import numpy as np
-        import pandas as pd
-
-        localizations = pd.read_csv(input.localizations, sep="\t").set_index("Scan")
-        psm_scores = pd.read_csv(input.psm_scores, sep="\t",
-                                 usecols=["scan",
-                                          "percolator score",
-                                          "percolator q-value",
-                                          "percolator PEP"]).set_index("scan", drop=False)
-        localized_scores = psm_scores.join(localizations, how="left") 
-        localized_scores = localized_scores[~localized_scores.PepScore.isna()]
-        
-        def yield_mod(seq):
-            for ind, mod in enumerate(re.finditer("[A-Zn](\[[^A-Z]+\])?", seq), 1):
-                mod_mass = re.search("(?<=\[)([^A-Z]*)(?=\])", mod.group())
-                if mod_mass is not None:
-                    # Subtract 1 if the first character is an n-terminal designation
-                    yield mod.group()[0], ind - int(seq[0] == "n"), float(mod_mass.group())
-
-        def create_entries(row):
-            psm = PSM(sample_name = wildcards.sampleName,
-                      scan_number = row["scan"],
-                      label = wildcards.psmLabel,
-                      sequence = row["LocalizedSequence"],
-                      base_sequence =  re.sub("[^A-Z]+", "", row["LocalizedSequence"]),
-                      score = row["percolator score"],
-                      qvalue = row["percolator q-value"],
-                      pep = row["percolator PEP"])
-
-            phospho_scores = iter(zip(row["Ascores"].split(";"), str(row["AltSites"]).split(";")))
-
-            for mod_res, mod_ind, mod_mass in yield_mod(row["LocalizedSequence"]):
-                score = np.inf
-                alt_pos = ""
-                if np.isclose(config["ascore"]["params"]["mod_mass"], mod_mass, rtol=0, atol=1):
-                    score, alt_pos = next(phospho_scores)
-
-                psm.modifications.append(PSMModification(
-                    residue=mod_res,
-                    position=mod_ind, 
-                    mass=mod_mass, 
-                    localization_score=score, 
-                    alternative_positions=alt_pos
-                ))
-
-            return psm
-
-        engine = create_engine(ALCHEMY_PATH)
-        session = sessionmaker(bind=engine)()
-        entries = localized_scores.apply(create_entries, axis=1).tolist()
-        for i in map(time.sleep, np.random.uniform(0, 5, size=100)):
-            try:
-                session.add_all(localized_scores.apply(create_entries, axis=1).tolist())
-                session.commit()
-                break
-            except OperationalError:
-                session.rollback()
-
-rule finish_search:
-    input:
-        "flags/search_flags/{parentDataset}/{sampleName}.search.target.write.complete",
-        "flags/search_flags/{parentDataset}/{sampleName}.search.decoy.write.complete"
+        ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.target.txt"),
+        ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.decoy.txt")
     output:
         touch("flags/search_flags/{parentDataset}/{sampleName}.search.complete")
+    params:
+        raw = "samples/{parentDataset}/{sampleName}/{sampleName}.raw",
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML"
     shell:
         """
-        rm {input[0]} {input[1]}
+        if [ -f {params.raw} ]; then echo rm {params.raw}; fi
+        if [ -f {params.mzml} ]; then echo rm {params.mzml}; fi
         """
+
+def evaluate_search_samples(wildcards):
+    checkpoints.finalize_preprocessing.get(**wildcards)
+    return expand(
+               "flags/search_flags/{parentDataset}/{sampleName}.search.complete", zip,
+               **DatabaseInterface(DATABASE_PATH).get_sample_manifest()
+           )
+
+checkpoint finalize_search:
+    input:
+        evaluate_search_samples
+    output:
+        touch("flags/search_flags/search.complete")
+
