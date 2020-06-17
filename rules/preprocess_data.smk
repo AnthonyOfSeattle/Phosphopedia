@@ -59,6 +59,52 @@ rule raw_to_mzml:
         &> {log}
         """
 
+rule extract_scan_information:
+    input:
+        ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML")
+    output:
+        "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv"
+    group:
+        "preprocess"
+    run:
+        import numpy as np
+        import pandas as pd
+        from pyteomics.mzml import MzML
+
+        scan = []
+        ms_level = []
+        rt = []
+        precursor = []
+        charge = []
+        try:
+            mzml = MzML(input[0])
+            for s in mzml:
+                scan.append(s["index"] + 1)
+                rt.append(s["scanList"]["scan"][0]["scan start time"])
+                ms_level.append(s["ms level"])
+                if s["ms level"] == 2:
+                    precursor.append(
+                        s["precursorList"]\
+                         ["precursor"][0]\
+                         ["selectedIonList"]\
+                         ["selectedIon"][0].get("selected ion m/z", np.nan)
+                    )
+                    charge.append(
+                        s["precursorList"]\
+                         ["precursor"][0]\
+                         ["selectedIonList"]\
+                         ["selectedIon"][0].get("charge state", np.nan)
+                    )
+                else:
+                    precursor.append(np.nan)
+                    charge.append(np.nan)
+        except Exception as e:
+            print("Error Occured: Printing nothing")
+
+        pd.DataFrame({"scan": scan, "ms_level": ms_level, 
+                      "rt": rt, "precursor": precursor, 
+                      "charge": charge}).to_csv(output[0], sep="\t", index=False)
+
 def update_mass_analyzer(input_file, sample_name, database):
     from pyteomics.mzml import MzML
 
@@ -83,7 +129,8 @@ def update_mass_analyzer(input_file, sample_name, database):
 
 rule file_checks:
     input:
-        ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML")
+        scan_info = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv"),
+        mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML")
     output:
         touch("flags/preprocess_flags/{parentDataset}/{sampleName}.preprocess.complete")
     params:
@@ -97,7 +144,7 @@ rule file_checks:
         if os.path.isfile(params.download_error) or os.path.isfile(params.conversion_error):
             database.add_error(sample_name = wildcards.sampleName, error_code = "preprocessError")
         else:
-            update_mass_analyzer(input[0], wildcards.sampleName, database)
+            update_mass_analyzer(input.mzml, wildcards.sampleName, database)
 
 def evaluate_samples_to_preprocess(wildcards):
     checkpoints.update_database.get(**wildcards)
