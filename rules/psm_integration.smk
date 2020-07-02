@@ -46,27 +46,7 @@ rule subintegration:
                 "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{{psmLabel}}.txt", zip, **sample_manifest
             ), psmLabel=["target", "decoy"]
         )
-        #print(percolator_files[:10])
-        #print(ascore_files[:10])
-        #quit()
 
-        #print("Finding files")
-        #percolator_files = glob("percolator/LOC00000[1234]/*/*.percolator.*.psms.txt")
-        #percolator_files += glob("percolator/PXD000293/*/*.percolator.*.psms.txt")
-        #percolator_files += glob("percolator/PXD000612/*/*.percolator.*.psms.txt")
-        #percolator_files.sort(
-        #    key=lambda path: (os.path.split(path)[1].split(".")[0], 
-        #                      os.path.split(path)[1].split(".")[2])
-        #)
-
-        #ascore_files = glob("ascore/LOC00000[1234]/*/*.ascore.*.txt")
-        #ascore_files += glob("ascore/PXD000293/*/*.ascore.*.txt")
-        #ascore_files += glob("ascore/PXD000612/*/*.ascore.*.txt")
-        #ascore_files.sort(
-        #    key=lambda path: (os.path.split(path)[1].split(".")[0], 
-        #                      os.path.split(path)[1].split(".")[2])
-        #)
-        
         manager = SubintegrationManager(
             nworkers=8, file_chunk_size=1e3, record_chunk_size=1e4
         )
