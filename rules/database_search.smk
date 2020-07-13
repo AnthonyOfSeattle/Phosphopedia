@@ -6,7 +6,7 @@
 
 rule comet_param_builder:
     input:
-        "flags/preprocess_flags/preprocess.complete"
+        ancient("flags/preprocess_flags/preprocess.complete")
     output:
         "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"
     group:
@@ -32,7 +32,7 @@ rule comet_search:
     input:
         mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
         parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
-        ref = "config/" + config["comet"]["ref"]
+        ref = ancient("config/" + config["comet"]["ref"])
     output:
         pin = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
     params:
@@ -66,7 +66,7 @@ rule comet_search:
 
 rule percolator_pin_builder:
     input:
-        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
+        ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin")
     output:
         "percolator/{parentDataset}/{sampleName}/{sampleName}.pin"
     params:
@@ -114,7 +114,7 @@ rule percolator_scoring:
 
 rule ascore_param_builder:
     input:
-        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt"
+        ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt")
     output:
         "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params"
     group:
@@ -138,8 +138,8 @@ rule ascore_param_builder:
 
 rule ascore_localization:
     input:
-        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
-        percolator_ids = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
+        mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML"),
+        percolator_ids = ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt"),
         parameter_file = ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params")
     output:
         "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt"
