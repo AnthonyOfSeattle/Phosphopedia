@@ -1,0 +1,55 @@
+{
+    "__default__" :
+    {
+        "project"   : "sage",
+        "priority"  : "0",
+        "ncores"    : "1",
+        "resources" : "mfree=1G,h_rt=08:00:00",
+        "eNo"       : "{WORKING_DIR}/eNo/",
+    },
+
+    "peprocess" :
+    {
+        "ncores" : "8"
+    },
+
+    "idfree_qc" :
+    {
+        "resources" : "mfree=2G,h_rt=00:30:00",
+    },
+
+    "comet" :
+    {
+        "ncores"    : "8",
+        "resources" : "mfree=1.5G,h_rt=08:00:00",
+    },
+
+    "percolator" :
+    {
+        "ncores"    : "2",
+        "resources" : "mfree=2G,h_rt=08:00:00"
+    },
+
+    "ascore" :
+    {
+        "ncores"    : "2",
+        "resources" : "mfree=4G,h_rt=08:00:00"
+    },
+
+    "quant":
+    {
+        "ncores"    : "8",
+        "resources" : "mfree=1G,h_rt=08:00:00"
+    },
+
+    "subintegration" :
+    {
+        "ncores"    : "8",
+        "resources" : "mfree=4G,h_rt=08:00:00"
+    },
+
+    "finalize_integration" :
+    {
+        "resources" : "mfree=16G,h_rt=08:00:00"
+    }
+}
