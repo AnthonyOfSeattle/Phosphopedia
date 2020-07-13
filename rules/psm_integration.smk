@@ -36,6 +36,10 @@ rule subintegration:
         from glob import glob
 
         sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
+        scan_info_files = 2 * expand(
+            "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv", zip, **sample_manifest
+        )
+        scan_info_files.sort()        
         percolator_files = expand(
             expand(
                 "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", zip, **sample_manifest
@@ -53,7 +57,7 @@ rule subintegration:
 
         t0 = time.time()
         manager.map_psms(
-            percolator_files, ascore_files,
+            scan_info_files, percolator_files, ascore_files,
             input.group_file, int(wildcards.groupNumber)
         )
         print("PSMs took {} seconds".format(time.time() - t0))

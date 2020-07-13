@@ -46,7 +46,7 @@ class SubintegrationManager:
 
         return psm_protein_links
 
-    def map_psms(self, psm_files, localization_files, group_file = None, group_number = -1):
+    def map_psms(self, scan_info_files, psm_files, localization_files, group_file = None, group_number = -1):
         # Initialize workers with group information
         if group_file is not None:
             with open(group_file, "r") as group_src:
@@ -69,6 +69,7 @@ class SubintegrationManager:
             psms = list(chain.from_iterable(
                 workers.map(
                    PSMMapper.run, zip(
+                       scan_info_files[chunk_start:chunk_end],
                        psm_files[chunk_start:chunk_end],
                        localization_files[chunk_start:chunk_end]
                    )
@@ -305,6 +306,9 @@ class SubintegrationManager:
         psm_list = (session.query(PSM.id,
                                   PSM.sample_name,
                                   PSM.scan_number,
+                                  PSM.scan_rt,
+                                  PSM.precursor_mz,
+                                  PSM.precursor_charge,
                                   PSM.score,
                                   PSMPeptide.pep_id,
                                   PSM.qvalue,
@@ -314,8 +318,11 @@ class SubintegrationManager:
 
         psm_list = [",".join([str(e) for e in psm]) + "\n" for psm in psm_list]
         with open(os.path.join(path, "psms.csv"), 'w') as dest:
-            dest.write(",".join(["id", "sample_name", "scan_number", "score", 
-                                 "pep_id", "qvalue", "label"]) + "\n")
+            dest.write(",".join(["id", "sample_name", 
+                                 "scan_number", "scan_rt",
+                                 "precursor_mz", "precursor_charge",
+                                 "score", "pep_id", 
+                                 "qvalue", "label"]) + "\n")
             dest.writelines(psm_list)
 
         # Dump peptides and associated PTMs

@@ -15,7 +15,8 @@ class PSMMapper:
         GROUP_NUMBER = group_number
 
     @staticmethod
-    def gather_data(psm_path, localization_path):
+    def gather_data(scan_info_path, psm_path, localization_path):
+        scan_info = pd.read_csv(scan_info_path, sep="\t").set_index("scan")
         localizations = pd.read_csv(localization_path, sep="\t").set_index("Scan")
         psm_scores = pd.read_csv(psm_path, sep="\t",
                                  usecols=["scan",
@@ -27,7 +28,8 @@ class PSMMapper:
             select = [PROTEIN_GROUPS.get(ref_set.split(",")[0].lstrip("decoy_"), -1) == GROUP_NUMBER
                       for ref_set in psm_scores["protein id"]]
             psm_scores = psm_scores[select]
-        localized_scores = psm_scores.join(localizations, how="left")
+        localized_scores = psm_scores.join(localizations, how="left")\
+                                     .join(scan_info, how="left")
         localized_scores = localized_scores[~localized_scores.PepScore.isna()]
         return localized_scores
 
@@ -57,6 +59,9 @@ class PSMMapper:
 
         psm = dict(sample_name = basename,
                    scan_number = row["scan"],
+                   scan_rt = row["rt"],
+                   precursor_mz = row["precursor"],
+                   precursor_charge = row["charge"],
                    label = label,
                    base_sequence =  re.sub("[^A-Z]+", "", row["LocalizedSequence"]),
                    score = row["percolator score"],
@@ -72,6 +77,6 @@ class PSMMapper:
     def run(file_tuple):
         localized_scores = PSMMapper.gather_data(*file_tuple)
         psm_entries = localized_scores.apply(PSMMapper.create_entries, axis=1,
-                                             label=os.path.split(file_tuple[0])[1].split(".")[2],
-                                             basename=os.path.split(file_tuple[0])[1].split(".")[0]).tolist()
+                                             label=os.path.split(file_tuple[1])[1].split(".")[2],
+                                             basename=os.path.split(file_tuple[1])[1].split(".")[0]).tolist()
         return psm_entries
