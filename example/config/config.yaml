@@ -1,0 +1,51 @@
+datasets:
+  - - "PXD001492"
+    - "."
+
+comet:
+  ref: "UP000002311_saccharomyces_cerevisiae_2020_03_22.fasta"
+
+  params:
+      # Scoring params
+      peptide_mass_tolerance: 50.00
+      peptide_mass_units: 2
+      precursor_tolerance_type: 1 
+      isotope_error: 1
+      theoretical_fragment_ions: 1
+      FTMS:
+        fragment_bin_tol: 0.02
+        fragment_bin_offset: 0.0
+      ITMS:
+        fragment_bin_tol: 1.0005
+        fragment_bin_offset: 0.4
+
+      # Modifications
+      variable_mod01: "15.9949 M 0 3 -1 0 0"
+      variable_mod02: "42.010565 n 0 1 0 0 0"
+      variable_mod03: "79.966331 STY 0 3 -1 0 0"
+      max_variable_mods_in_peptide: 7
+
+      # Run params
+      decoy_search: 1
+      num_threads: 8
+      clip_nterm_methionine: 1
+      spectrum_batch_size: 15000
+      num_output_lines: 10
+
+percolator_pin_builder:
+  drop:
+    - "deltCn"
+    - "deltLCn"
+
+ascore:
+  params:
+    residues: "STY"
+    mod_mass: 79.966331
+    hit_depth: 1
+    FTMS:
+      mz_error: .025
+    ITMS:
+      mz_error: .25
+
+integration:
+  ngroups: 1
