@@ -38,7 +38,6 @@ class Peptide(TempBase):
     base_sequence = Column(String)
     sequence = Column(String)
     score = Column(Numeric(asdecimal=False))
-    qvalue = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))
     modifications = Column(BLOB)
 
@@ -66,5 +65,4 @@ class PTM(TempBase):
     prot_id = Column(Integer, primary_key=True)
     position = Column(Integer, primary_key=True)
     score = Column(Numeric(asdecimal=False))
-    qvalue = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))

@@ -35,21 +35,28 @@ rule subintegration:
     run:
         from glob import glob
 
-        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
+        # List files which contain scan information
+        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest().iloc[:10,:]
         scan_info_files = 2 * expand(
             "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv", zip, **sample_manifest
         )
-        scan_info_files.sort()        
+        scan_info_files.sort()
+
+        # List percolator files
         percolator_files = expand(
             expand(
                 "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", zip, **sample_manifest
             ), psmLabel=["target", "decoy"]
         )
+        percolator_files.sort()
+
+        # List corresponding ascore files
         ascore_files = expand(
             expand(
                 "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{{psmLabel}}.txt", zip, **sample_manifest
             ), psmLabel=["target", "decoy"]
         )
+        ascore_files.sort()
 
         manager = SubintegrationManager(
             nworkers=8, file_chunk_size=1e3, record_chunk_size=1e4
@@ -81,14 +88,6 @@ rule subintegration:
         print("Modifications took {} seconds".format(time.time() - t0))
 
         t0 = time.time()
-        manager.update_peptide_fdr()
-        print("Peptide FDR update took {} seconds".format(time.time() - t0))
-    
-        t0 = time.time()
-        manager.update_ptm_fdr()
-        print("PTM FDR update took {} seconds".format(time.time() - t0))
-
-        t0 = time.time()
         manager.dump(params.output_dir)
         print("Dump took {} seconds".format(time.time() - t0))
 
@@ -105,5 +104,11 @@ rule finalize_integration:
     benchmark:
         "benchmarks/integration_manager/finalize_integration.benchmark.txt"
     run:
+        print("Merging data")
         merger = SubintegrationMerger("integration_engine")
         merger.process(params.dirs)
+
+        print("Calculating FDR on full data")
+        calculator = FDRCalculator()
+        calculator.process_path("integration_engine/")
+

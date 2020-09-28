@@ -7,7 +7,6 @@ from sqlalchemy import create_engine, update, delete, and_, func
 from sqlalchemy.orm import sessionmaker, scoped_session
 from sqlalchemy.sql import text
 
-from .fdr import *
 from .psm_mapper import *
 from .peptide_mapper import *
 from .protein_coverage_analyzer import *
@@ -246,59 +245,6 @@ class SubintegrationManager:
         session.commit()
         session.remove()
 
-    def update_peptide_fdr(self):
-        session = self._get_session()
-        peptide_scores = session.query(Peptide.psm_id, Peptide.score, Peptide.label).all()
-        peptide_scores.sort(key=lambda pep: -pep[1])
-
-        score_array = np.array([pep[1] for pep in peptide_scores])
-        label_array = np.array([pep[2] for pep in peptide_scores])
-        fdr_array = calculate_fdr(score_array, label_array)
-        update_dict = {pep[0] : fdr for pep, fdr in zip(peptide_scores, fdr_array)}
-
-        max_psm_id = session.query(func.max(Peptide.psm_id)).all()[0][0]
-        for chunk in range(0, max_psm_id, 1000):
-            pep_objects = (session.query(Peptide)
-                               .filter(Peptide.psm_id.between(chunk, chunk + 1000))
-                               .all())
-
-            for pep in pep_objects:
-                pep.qvalue = update_dict[pep.psm_id]
-
-            session.flush()
-
-        session.commit()
-        session.remove()
-
-    def update_ptm_fdr(self):
-        session = self._get_session()
-        ptm_scores = (session.query(PTM.prot_id,
-                                    PTM.position,
-                                    PTM.score,
-                                    Protein.label)
-                          .join(Protein, PTM.prot_id == Protein.id)).all()
-        ptm_scores.sort(key=lambda ptm: -ptm[2])
-
-        score_array = np.array([ptm[2] for ptm in ptm_scores])
-        label_array = np.array([ptm[3] for ptm in ptm_scores])
-        fdr_array = calculate_fdr(score_array, label_array)
-        update_dict = {(ptm[0], ptm[1]) : fdr for ptm, fdr in zip(ptm_scores, fdr_array)}
-
-        max_prot_id = session.query(func.max(PTM.prot_id)).all()[0][0]
-        for chunk in range(0, max_prot_id, 1000):
-            ptm_objects = (session.query(PTM)
-                               .filter(PTM.prot_id.between(chunk, chunk + 1000))
-                               .all()
-            )
-
-            for ptm in ptm_objects:
-                ptm.qvalue = update_dict[(ptm.prot_id, ptm.position)]
-
-            session.flush()
-
-        session.commit()
-        session.remove()
-
     def dump(self, path = ""):
         session = self._get_session()
 
@@ -311,7 +257,6 @@ class SubintegrationManager:
                                   PSM.precursor_charge,
                                   PSM.score,
                                   PSMPeptide.pep_id,
-                                  PSM.qvalue,
                                   PSM.label)
                         .join(PSMPeptide, PSM.id == PSMPeptide.psm_id)
                    ).all()
@@ -322,7 +267,7 @@ class SubintegrationManager:
                                  "scan_number", "scan_rt",
                                  "precursor_mz", "precursor_charge",
                                  "score", "pep_id", 
-                                 "qvalue", "label"]) + "\n")
+                                 "label"]) + "\n")
             dest.writelines(psm_list)
 
         # Dump peptides and associated PTMs
@@ -330,7 +275,6 @@ class SubintegrationManager:
         pep_mod_list = (session.query(Peptide.psm_id,
                                       Peptide.sequence,
                                       Peptide.score,
-                                      Peptide.qvalue,
                                       Peptide.label,
                                       Peptide.modifications)
                         ).all()
@@ -345,7 +289,7 @@ class SubintegrationManager:
 
         pep_list = [",".join([str(e) for e in pep]) + "\n" for pep in pep_list]
         with open(os.path.join(path, "peptides.csv"), 'w') as dest:
-            dest.write(",".join(["id", "sequence", "score", "qvalue", "label"]) + "\n")
+            dest.write(",".join(["id", "sequence", "score", "label"]) + "\n")
             dest.writelines(pep_list)
 
         mod_list = [",".join([str(e) for e in mod]) + "\n" for mod in mod_list]
@@ -380,14 +324,13 @@ class SubintegrationManager:
         # Dump modified sites
         site_list = (session.query(PTM.prot_id,
                                    PTM.position,
-                                   PTM.score,
-                                   PTM.qvalue)
+                                   PTM.score)
                          .join(Protein, PTM.prot_id == Protein.id)
                    ).all()
 
         site_list = [",".join([str(e) for e in site]) + "\n" for site in site_list]
         with open(os.path.join(path, "sites.csv"), 'w') as dest:
-            dest.write(",".join(["prot_id", "position", "score", "qvalue"]) + "\n")
+            dest.write(",".join(["prot_id", "position", "score"]) + "\n")
             dest.writelines(site_list)
 
         session.remove()
