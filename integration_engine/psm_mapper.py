@@ -24,10 +24,28 @@ class PSMMapper:
                                           "percolator q-value",
                                           "percolator PEP",
                                           "protein id"]).set_index("scan", drop=False)
-        if PROTEIN_GROUPS and GROUP_NUMBER >= 0:
-            select = [PROTEIN_GROUPS.get(ref_set.split(",")[0].lstrip("decoy_"), -1) == GROUP_NUMBER
-                      for ref_set in psm_scores["protein id"]]
-            psm_scores = psm_scores[select]
+
+        select = []
+        for prot_list in psm_scores["protein id"]:
+            prot_list = prot_list.split(",")
+            isdecoy = np.array([p.startswith("decoy_") for p in prot_list])
+            if not (np.all(isdecoy) or np.all(~isdecoy)):
+                select.append(False)
+                continue
+
+            elif PROTEIN_GROUPS and GROUP_NUMBER >= 0:
+                group_set = [PROTEIN_GROUPS.get(prot, -1)
+                             for prot in prot_list]
+                if not all([g == group_set[0] for g in group_set]):
+                    print(prot_list)
+                    print(group_set)
+
+                select.append(group_set[0] == GROUP_NUMBER)
+
+            else:
+                select.append(True)
+
+        psm_scores = psm_scores[select]
         localized_scores = psm_scores.join(localizations, how="left")\
                                      .join(scan_info, how="left")
         localized_scores = localized_scores[~localized_scores.PepScore.isna()]
@@ -55,7 +73,12 @@ class PSMMapper:
                 if alt_pos and alt_pos != "nan":
                   alt_pos = [int(i) for i in alt_pos.split(",")]
 
-            mods[mod_ind] = {"score": score, "residue" : mod_res, "mass": mod_mass, "alt_pos": alt_pos}
+            mods[mod_ind] = {
+                "score": score, 
+                "residue" : mod_res, 
+                "mass": mod_mass, 
+                "alt_pos": alt_pos
+            }
 
         psm = dict(sample_name = basename,
                    scan_number = row["scan"],
@@ -76,7 +99,15 @@ class PSMMapper:
     @staticmethod
     def run(file_tuple):
         localized_scores = PSMMapper.gather_data(*file_tuple)
-        psm_entries = localized_scores.apply(PSMMapper.create_entries, axis=1,
-                                             label=os.path.split(file_tuple[1])[1].split(".")[2],
-                                             basename=os.path.split(file_tuple[1])[1].split(".")[0]).tolist()
-        return psm_entries
+        # Remove peptides mapped to both target and decoy set
+        label = os.path.split(file_tuple[1])[1].split(".")[2]
+
+        psm_entries = localized_scores.apply(
+            PSMMapper.create_entries, axis=1,
+            label=label,
+            basename=os.path.split(file_tuple[1])[1].split(".")[0]
+        )
+        if psm_entries.shape[0] > 0:
+          return psm_entries.tolist()
+        else:
+          return []

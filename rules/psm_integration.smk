@@ -7,11 +7,18 @@ rule group_proteins:
     output:
         group_file = "integration_engine/" + protein_group_filename
     run:
-        pg = ProteinGrouper(
-            PeptideExtractor(input.ref, "trypsin"),
-            config["integration"]["ngroups"]
+        # List percolator files
+        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
+        percolator_files = expand(
+            expand(
+                "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", zip, **sample_manifest
+            ), psmLabel=["target", "decoy"]
         )
-        pg.group()
+        percolator_files.sort()
+        pg = PercolatorProteinGrouper(n_groups = config["integration"]["ngroups"], 
+                                      n_workers = 8, 
+                                      chunk_size=1e3)
+        pg.group(percolator_files)
         pg.to_json(output.group_file)
 
 
@@ -36,7 +43,7 @@ rule subintegration:
         from glob import glob
 
         # List files which contain scan information
-        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest().iloc[:10,:]
+        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
         scan_info_files = 2 * expand(
             "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv", zip, **sample_manifest
         )
@@ -97,7 +104,13 @@ rule finalize_integration:
         expand("flags/integration_flags/subintegration_{groupNumber}.complete",
                groupNumber = range(config["integration"]["ngroups"]))
     output:
-        touch("flags/integration_flags/integration.complete")
+        touch("flags/integration_flags/integration.complete"),
+        psms = "integration_engine/psms.csv",
+        peptides = "integration_engine/peptides.csv",
+        peptide_modifications = "integration_engine/peptide_modifications.csv",
+        proteins = "integration_engine/proteins.csv",
+        peptide_protein = "integration_engine/peptide_protein.csv",
+        sites = "integration_engine/sites.csv"
     params:
         dirs = expand("integration_engine/subintegration/group_{groupNumber}",
                       groupNumber = range(config["integration"]["ngroups"]))
@@ -109,6 +122,13 @@ rule finalize_integration:
         merger.process(params.dirs)
 
         print("Calculating FDR on full data")
-        calculator = FDRCalculator()
-        calculator.process_path("integration_engine/")
+        fdr_calculator = FDRCalculator()
+        fdr_calculator.process_path("integration_engine/")
 
+        print("Calculating the iRT on full data")
+        rt_calculator = RTCalculator("isotonic",
+                                     98115,
+                                     method="descent",
+                                     lr=1e-2,
+                                     max_epochs=50)
+        rt_calculator.process_path("integration_engine/")

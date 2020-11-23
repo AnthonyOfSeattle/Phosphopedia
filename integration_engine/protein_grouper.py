@@ -3,7 +3,9 @@ import re
 import json
 import numpy as np
 import pandas as pd
-from itertools import product, cycle
+from itertools import product, cycle, combinations, chain
+from collections import deque
+from multiprocessing import Pool
 
 class InputError(Exception):
     def __init__(self, message):
@@ -11,14 +13,13 @@ class InputError(Exception):
 
 
 class Digester:
-    def __init__(self, enzyme, n_missed = 2, min_len=6, max_len=60):
+    def __init__(self, enzyme, min_len=6, max_len=60):
         # This should be all that you need to change to add a new enzyme
         # enzyme names <- use lowercase
         # amino acids <- use UPPERCASE
         enzyme_regex = {"trypsin" : "[KR](?!P)",
                         "lysc" : "K"}
         self.cut_site = re.compile(enzyme_regex[enzyme.lower()])
-        self.n_missed = n_missed
         self.min_len = min_len
         self.max_len = max_len
 
@@ -61,6 +62,7 @@ class PeptideExtractor:
         self.digester = Digester(enzyme)
         self.peptide_list = []
         self.id_list = []
+        self.peptide_df = None
 
     def _process_fasta_entry(self, sequence_buffer):
         # Check if proper fasta sequence
@@ -74,6 +76,7 @@ class PeptideExtractor:
         sequence_id = sequence_buffer[0].split()[0][1:]
 
         peptides = self.digester.digest("".join(sequence_buffer[1:]))
+        peptides = [re.sub("[IL]", "X", p) for p in peptides]
 
         self.peptide_list.extend(peptides)
         self.id_list.extend([sequence_id] * len(peptides))
@@ -94,6 +97,8 @@ class PeptideExtractor:
                     sequence_buffer.append(line)
 
             self._process_fasta_entry(sequence_buffer)
+            self.peptide_df = pd.DataFrame({"ref": self.id_list,
+                                            "peptide": self.peptide_list})
 
 
 class ProteinGrouper:
@@ -124,22 +129,31 @@ class ProteinGrouper:
 
         return protein_matches
 
+    def _get_clique(self, ref):
+        clique = set()
+        ref_stack = [ref]
+        ind = 0
+        while ref_stack:
+            print(ind, len(ref_stack), len(clique))
+            ind += 1
+            ref = ref_stack.pop()
+            for ref in self.protein_matches[ref]:
+                if ref not in clique:
+                    clique.add(ref)
+                    ref_stack.append(ref)
+
+        return clique
+
     def _create_groups(self):
         references = list(self.protein_matches.keys())
-        np.random.shuffle(references)
 
         group_cycle = cycle(range(self.n_groups))
         group_map = {}
         for ref in references:
-            ref_set = self.protein_matches[ref]
-            group = None
-            for ref in ref_set:
-                group = group_map.get(ref, None)
-    
-            if group is None:
+            if ref not in group_map:
+                clique = self._get_clique(ref)
                 group = next(group_cycle)
-    
-            group_map.update({ref : group for ref in ref_set})
+                group_map.update({ref : group for ref in clique})
 
         _, group_counts = np.unique(list(group_map.values()), return_counts=True)
         return group_map, np.var(group_counts)
@@ -159,13 +173,100 @@ class ProteinGrouper:
         with open(file_name, "w") as dest:
             json.dump(self.group_map, dest, **kwargs)
 
+
+class PercolatorReader:
+    @staticmethod
+    def run(psm_path):
+        psm_map = pd.read_csv(
+            psm_path, sep="\t",
+            usecols=["scan", "protein id"]
+            ).set_index("scan")
+
+        protein_groups = []
+        for prot_list in psm_map["protein id"]:
+            prot_list = prot_list.split(",")
+            #prot_list = ["|".join(p.split("|")[:-1]) for p in prot_list]
+            isdecoy = np.array([p.startswith("decoy_") for p in prot_list])
+            if not (np.all(isdecoy) or np.all(~isdecoy)):
+                continue
+
+            protein_groups.append(prot_list)
+
+        return protein_groups
+
+class PercolatorProteinGrouper:
+    def __init__(self, n_groups, n_workers, chunk_size):
+        self.n_groups = n_groups
+        self.n_workers = n_workers
+        self.chunk_size = int(chunk_size)
+        self.protein_matches = {}
+        self.group_map = {}
+
+    def _match_proteins(self, groups):
+        for ref_list in groups:
+            for ref in ref_list:
+                self.protein_matches.setdefault(ref, set())
+                self.protein_matches[ref].update(ref_list)
+
+    def _get_clique(self, ref):
+        clique = set()
+        ref_stack = [ref]
+        while ref_stack:
+            ref = ref_stack.pop()
+            for ref in self.protein_matches[ref]:
+                if ref not in clique:
+                    clique.add(ref)
+                    ref_stack.append(ref)
+
+        return clique
+
+    def _create_groups(self):
+        references = self.protein_matches.keys()
+        group_count = {group : 0 for group in range(self.n_groups)}
+        group_cycle = cycle(group_count.keys())
+        for ref in references:
+            if ref not in self.group_map:
+                clique = self._get_clique(ref)
+
+                group = next(group_cycle)
+                this_count = group_count[group]
+                next_count = group_count[(group + 1) % self.n_groups]
+                while this_count > next_count:
+                    group = next(group_cycle)
+                    this_count = group_count[group]
+                    next_count = group_count[(group + 1) % self.n_groups]
+
+                self.group_map.update({ref : group for ref in clique})
+                group_count[group] += len(clique)
+
+    def group(self, files):
+        workers = Pool(self.n_workers)
+        for chunk_start in range(0, len(files), self.chunk_size):
+            chunk_end = min(len(files), chunk_start + self.chunk_size)
+            print("Working on files {} through {}".format(chunk_start, chunk_end),
+                  flush=True)
+
+            protein_groups = list(chain.from_iterable(
+                workers.map(PercolatorReader.run,
+                            files[chunk_start:chunk_end])
+                ))
+            self._match_proteins(protein_groups)
+
+        self._create_groups()
+
+    def to_json(self, file_name, **kwargs):
+        with open(file_name, "w") as dest:
+            json.dump(self.group_map, dest, **kwargs) 
+
+
 if __name__ == "__main__":
     fasta_name = sys.argv[1]
     destination = sys.argv[2]
     n_groups = int(sys.argv[3])
-    pg = ProteinGrouper(
+    pg = PeptideGrouper(
             PeptideExtractor(fasta_name, "trypsin"),
             n_groups
          )
     pg.group()
+    _, counts = np.unique(list(pg.group_map.values()), return_counts=True)
     pg.to_json(destination)

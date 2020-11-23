@@ -40,7 +40,7 @@ class SubintegrationMerger:
         data = pd.read_csv(source)
         data.id += self.counter.protein_count
         self._dump(data, os.path.join(self.dest, "proteins.csv"))
-        self.counter.protein_count += data.id.max()
+        self.counter.protein_count = data.id.max()
 
     def _process_peptides(self, source):
         data = pd.read_csv(source)

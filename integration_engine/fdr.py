@@ -24,8 +24,9 @@ class FDRCalculator:
 
     def _process_psms(self, path):
         print("Loading PSMs...")
-        psms = pd.read_csv(os.path.join(path, "psms.csv"))
-
+        psms = pd.read_csv(os.path.join(path, "psms.csv"),
+                           dtype={"precursor_charge": str})
+        
         print("Sorting PSMs by score...")
         psms.sort_values("score", inplace=True, ascending=False)
 
@@ -73,7 +74,7 @@ class FDRCalculator:
         )
 
         print("Dumping Phosphosites...")
-        sites.iloc[:,:-2].to_csv(os.path.join(path, "sites.csv"), index=False)
+        sites.drop(["label", "accession"], axis=1).to_csv(os.path.join(path, "sites.csv"), index=False)
 
     def process_path(self, path):
         print("Calculating the FDR for: " + path)
