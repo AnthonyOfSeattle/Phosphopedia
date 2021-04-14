@@ -14,16 +14,18 @@ from .modification_mapper import *
 from .database_schema import *
 
 class SubintegrationManager:
-    def __init__(self, nworkers = 8, file_chunk_size = 1e3, record_chunk_size = 1e4):
+    def __init__(self, nworkers = 8, file_chunk_size = 1e3, record_chunk_size = 1e4, db_path=None):
         # Processing parameters
         self.nworkers = nworkers
         self.file_chunk_size = int(file_chunk_size)
         self.record_chunk_size = int(record_chunk_size)
 
         # Initialize in memory database
-        self.engine = create_engine("sqlite://")
-        #self.engine = create_engine(self.db_path)
-        #self.session = sessionmaker(bind=self.engine)()
+        if db_path is None:
+            self.engine = create_engine("sqlite://")
+        else:
+            self.engine = create_engine(db_path)
+        
         TempBase.metadata.create_all(self.engine)
 
         # Storage for protein accessions
@@ -168,9 +170,22 @@ class SubintegrationManager:
                               seq = self.protein_sequence_map[group_info[1]])
                          for group_info, match_iter in grouped_matches]
 
+        # get individual isoform coverage
         workers = Pool(self.nworkers)
         mapped_results = workers.map(ProteinCoverageAnalyzer.run, protein_dicts)
-        update_dict = {prot_id : coverage for prot_id, coverage in mapped_results}
+        mapped_results.sort(key = lambda x: (x[2], x[1]))
+        grouped_results = groupby(mapped_results, lambda x: (x[2], x[1].split("-")[0]))
+
+        # collapse to protein level
+        update_dict = {}
+        for _, group in grouped_results:
+            id_list = []
+            max_cov = 0
+            for id, acc, label, cov in group:
+                id_list.append(id)
+                max_cov = max(max_cov, cov)
+
+            update_dict.update({id : max_cov for id in id_list})
 
         max_prot_id = session.query(func.max(Protein.id)).all()[0][0]
         for chunk in range(0, max_prot_id, 1000):
@@ -237,10 +252,16 @@ class SubintegrationManager:
 
         ptms = []
         for prot_id, ptm_dict in mapped_results:
-            for pos, score in ptm_dict.items():
+            for (pos, res), score in ptm_dict.items():
                 ptms.append(
-                    dict(prot_id = prot_id, position=pos, score=score)
+                    dict(
+                        prot_id=prot_id, 
+                        position=pos, 
+                        residue=res,
+                        score=score
+                    )
                 )
+
         session.execute(PTM.__table__.insert(), ptms)
         session.commit()
         session.remove()
@@ -324,13 +345,14 @@ class SubintegrationManager:
         # Dump modified sites
         site_list = (session.query(PTM.prot_id,
                                    PTM.position,
+                                   PTM.residue,
                                    PTM.score)
                          .join(Protein, PTM.prot_id == Protein.id)
                    ).all()
 
         site_list = [",".join([str(e) for e in site]) + "\n" for site in site_list]
         with open(os.path.join(path, "sites.csv"), 'w') as dest:
-            dest.write(",".join(["prot_id", "position", "score"]) + "\n")
+            dest.write(",".join(["prot_id", "position", "residue", "score"]) + "\n")
             dest.writelines(site_list)
 
         session.remove()

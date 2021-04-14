@@ -35,4 +35,4 @@ class ProteinCoverageAnalyzer:
         peptide_ranges = ProteinCoverageAnalyzer.get_peptide_ranges(unique_peptides, prot["seq"])
         total_coverage = ProteinCoverageAnalyzer.calculate_coverage(peptide_ranges)
         covered_proportion = total_coverage / len(prot["seq"])
-        return prot["id"], covered_proportion
+        return prot["id"], prot["acc"], prot["label"], covered_proportion

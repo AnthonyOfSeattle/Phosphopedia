@@ -17,7 +17,7 @@ class ModificationMapper:
             else:
                 pos = start + (pep_pos - 1)
 
-            prot_mod_pos.append(pos)
+            prot_mod_pos.append((pos, prot_seq[pos]))
 
         return prot_mod_pos
 
@@ -27,14 +27,15 @@ class ModificationMapper:
         for peptide in prot["peptide_list"]:
             seq, score, mods = peptide
             mods = pickle.loads(mods)
+            mods = {pos : info for pos, info in mods.items() if info["residue"] in "STY"}
             if prot["label"] == "decoy":
                 seq = seq[:-1][::-1] + seq[-1]
                 prot_mod_pos = ModificationMapper.get_mod_pos(seq, mods, prot["seq"], True)
             else:
                 prot_mod_pos = ModificationMapper.get_mod_pos(seq, mods, prot["seq"])
 
-            for pos in prot_mod_pos:
-                if mod_scores.get(pos, -np.inf) < score:
-                    mod_scores[pos] = score
+            for site in prot_mod_pos:
+                if mod_scores.get(site, -np.inf) < score:
+                    mod_scores[site] = score
 
         return prot["id"], mod_scores

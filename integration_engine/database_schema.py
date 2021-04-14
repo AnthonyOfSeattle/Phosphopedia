@@ -64,5 +64,6 @@ class PTM(TempBase):
 
     prot_id = Column(Integer, primary_key=True)
     position = Column(Integer, primary_key=True)
+    residue = Column(String(1))
     score = Column(Numeric(asdecimal=False))
     pep = Column(Numeric(asdecimal=False))

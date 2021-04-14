@@ -23,7 +23,10 @@ class PSMMapper:
                                           "percolator score",
                                           "percolator q-value",
                                           "percolator PEP",
-                                          "protein id"]).set_index("scan", drop=False)
+                                          "protein id"])\
+                                 .sort_values(["scan", "percolator score"])\
+                                 .set_index("scan", drop=False)
+        psm_scores = psm_scores.drop_duplicates(subset="scan", keep="last")
 
         select = []
         for prot_list in psm_scores["protein id"]:
