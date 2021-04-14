@@ -85,7 +85,7 @@ rule subintegration:
         t0 = time.time()
         manager.infer_protein_coverage()
         print("Coverage estimation took {} seconds".format(time.time() - t0))
-    
+
         t0 = time.time()
         manager.drop_low_coverage()
         print("High coverage selection took {} seconds".format(time.time() - t0))
@@ -130,5 +130,5 @@ rule finalize_integration:
                                      98115,
                                      method="descent",
                                      lr=1e-2,
-                                     max_epochs=50)
+                                     max_epochs=25)
         rt_calculator.process_path("integration_engine/")
