@@ -60,7 +60,12 @@ class RTAligner:
         external_id, count = np.unique(pep_ids, return_counts=True)
         self._peptide_df = pd.DataFrame(dict(external_id = external_id, occurence = count))
         self._peptide_df["internal_id"] = np.arange(self._peptide_df.shape[0])
-        self._peptide_df["learned_rt"] = np.random.randn(self._peptide_df.shape[0])
+        self._peptide_df = self._peptide_df.join(
+            pd.DataFrame(dict(learned_rt = X.flatten()))\
+                        .groupby(pep_ids.flatten())\
+                        .mean(),
+            on="external_id"
+        )
         self._peptide_df["fit_weight"] = 1.
         
         # initialize internals
@@ -413,6 +418,12 @@ class RTCalculator:
                 sample_names = low_count_detections.sample_name.values.reshape(self.target_shape)
             )
         ])
+
+        lower_bound = retention_times.learned_rt.quantile(0.001)
+        upper_bound = retention_times.learned_rt.quantile(.999)
+        retention_times.learned_rt -= lower_bound
+        retention_times.learned_rt *= 100./(upper_bound - lower_bound)
+        test.abs_scaled_error *= 100./(upper_bound - lower_bound)
 
         peptides = peptides.join(retention_times.set_index("pep_id"), 
                                  on = "id")\
