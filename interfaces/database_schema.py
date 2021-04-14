@@ -15,7 +15,7 @@ class Dataset(PhosphopediaBase):
     __tablename__ = "dataset"
 
     accession = Column(String(9), primary_key=True)
-    title = Column(String)
+    title = Column(String(250))
 
     def __repr__(self):
         title_print_len = min(len(self.title), 25)
@@ -29,10 +29,10 @@ class Sample(PhosphopediaBase):
 
     id = Column(Integer, primary_key=True)
     parentDataset = Column(String(9), ForeignKey("dataset.accession"))
-    sampleName = Column(String)
-    fileName = Column(String)
+    sampleName = Column(String(100))
+    fileName = Column(String(100))
     fileSize = Column(Integer)
-    fileLocation = Column(String)
+    fileLocation = Column(String(250))
 
     def __repr__(self):
         return "<Sample(id={}, sampleName='{}', fileName='{}')>".format(
@@ -72,68 +72,121 @@ class Error(PhosphopediaBase):
 #                       #
 #########################
 
-class IdentificationMixin:
-    id = Column(Integer, primary_key=True)
-    label = Column(String)
-    base_sequence = Column(String, index=True)
-    sequence = Column(String)
-    score = Column(Numeric(asdecimal=False))
-    qvalue = Column(Numeric(asdecimal=False))
-    pep = Column(Numeric(asdecimal=False))
+class PSM(PhosphopediaBase):
 
-class PSM(PhosphopediaBase, IdentificationMixin):
+    __tablename__ = "psm"
 
-    __tablename__ = "psms"
-
-    sample_name = Column(String)
-    scan_number = Column(Integer)
-
+    idPSM = Column(Integer, primary_key=True)
+    idPeptide = Column(Integer)
+    fdr = Column(Numeric(precision=10, 
+                         scale=8,
+                         asdecimal=False))
+    sampleName = Column(String(75))
+    scanNum = Column(Integer)
+    pCharge = Column(Integer)
+    pMz = Column(Numeric(precision=16,
+                         scale=12,
+                         asdecimal=False))
+    
     def __repr__(self):
-        return "<PSM(sample_name='{}', scan_number={}, label='{}', sequence='{}')>".format(
-            self.sample_name, self.scan_number, self.label, self.sequence
+        return "<PSM(idPSM = {}, idPeptide = {}, sampleName='{}', scanNum={}".format(
+            self.idPSM, self.idPeptide, self.sampleName, self.scanNum
         )
 
-class Peptide(PhosphopediaBase, IdentificationMixin):
+class Peptide(PhosphopediaBase):
 
-    __tablename__ = "peptides"
+    __tablename__ = "peptide"
+
+    idPeptide = Column(Integer, primary_key=True)
+    fdr = Column(Numeric(precision=10,   
+                         scale=8,
+                         asdecimal=False))
+    sequence = Column(String(100))
+    iRT = Column(Numeric(precision=16,
+                         scale=14,
+                         asdecimal=False))
+    nRTExamples = Column(Integer)
+    errorRT = Column(Numeric(precision=16,
+                             scale=14,
+                             asdecimal=False))
+    z2 = Column(Integer)
+    z3 = Column(Integer)
+    z4 = Column(Integer)
+    z5 = Column(Integer)
+    z6 = Column(Integer)
 
     def __repr__(self):
-        return "<Peptide(label='{}', sequence='{}')>".format(
-            self.label, self.sequence
+        return "<Peptide(idPeptide = {}, sequence = '{}')>".format(
+            self.idPeptide, self.sequence
         )
 
-class ModificationMixin:
+class PeptideSite(PhosphopediaBase):
+
+    __tablename__ = "peptide_site"
+
+    idPeptide = Column(Integer, primary_key=True)
+    idSite  = Column(Integer, primary_key=True)
+    ascore = Column(Numeric(precision=10,
+                            scale=6,
+                            asdecimal=False))
+
+    def __repr__(self):
+        return "<PeptideSite(idPeptide = {}, idSite = {}, ascore = {:.3f})>".format(
+            self.idPeptide, self.idSite, self.ascore
+        )
+
+class Protein(PhosphopediaBase):
+
+    __tablename__ = "protein"
+
+    idProtein = Column(Integer, primary_key=True)
+    accession = Column(String(10))
+    reference = Column(String(15))
+    description = Column(String(200))
+
+    def __repr__(self):
+        return "<Site(idProtein = {}, reference = '{}')>".format(
+            self.idProtein, self.reference
+        )
+
+class Site(PhosphopediaBase):
+
+    __tablename__ = "site"
+
+    idSite = Column(Integer, primary_key=True)
+    idProtein = Column(Integer)
     position = Column(Integer)
-    residue = Column(String)
-    mass = Column(Numeric(asdecimal=False))
-    localization_score = Column(Numeric(asdecimal=False))
-    alternative_positions = Column(String)
+    residue = Column(String(1))
+    fdr = Column(Numeric(precision=10,   
+                         scale=8,
+                         asdecimal=False))
+    grade = Column(String(1))
 
     def __repr__(self):
-        return "<Modification(position={}, residue={}, mass={}, localization_score={})>".format(
-            self.position, self.residue, self.mass, self.localization_score
+        return "<Site(idSite = {}, idProtein = {}, site = {})>".format(
+            self.idSite, self.idProtein, self.site
         )
 
-class PSMModification(PhosphopediaBase, ModificationMixin):
+class Pathway(PhosphopediaBase):
 
-    __tablename__ = "psm_modifications"
-    __table_args__ = (
-        PrimaryKeyConstraint('psm_id', 'position'),
-        {},
-    )
-    psm_id = Column(Integer, ForeignKey("psms.id"))
-    psm = relationship("PSM", back_populates="modifications")
+    __tablename__ = "pathway"
 
-PSM.modifications = relationship("PSMModification", order_by=PSMModification.position, back_populates="psm", lazy='joined')
+    idPathway = Column(Integer, primary_key=True)
+    name = Column(String(25))
 
-class PeptideModification(PhosphopediaBase, ModificationMixin):
+    def __repr__(self):
+        return "<Pathway(idPathway = {}, name = '{}')>".format(
+            self.idPathway, self.name
+        )
 
-    __tablename__ = "peptide_modifications"
-    __table_args__ = (
-        PrimaryKeyConstraint('peptide_id', 'position'),
-        {},
-    )
-    peptide_id = Column(Integer, ForeignKey("peptides.id"))
-    peptide = relationship("Peptide", back_populates="modifications")
+class PathwaySite(PhosphopediaBase):
 
-Peptide.modifications = relationship("PeptideModification", order_by=PeptideModification.position, back_populates="peptide", lazy='joined')
+    __tablename__ = "pathway_site"
+
+    idPathway = Column(Integer, primary_key=True)
+    idSite = Column(Integer, primary_key=True)
+
+    def __repr__(self):
+        return "<PathwaySite(idPathway = {}, idSite = {})>".format(
+            self.idPathway, self.idSite
+        )
