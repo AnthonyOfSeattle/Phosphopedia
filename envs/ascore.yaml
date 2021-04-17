@@ -1,0 +1,13 @@
+name: ascore
+channels:
+  - bioconda
+  - conda-forge
+dependencies:
+  - python=3.6
+  - cython
+  - pip
+  - pandas
+  - tqdm
+  - pyteomics
+  - pip:
+    - "git+git://github.com/AnthonyOfSeattle/pyAscore"
