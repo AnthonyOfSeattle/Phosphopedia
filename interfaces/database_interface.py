@@ -64,6 +64,10 @@ class DatabaseInterface:
         url = 'http://www.ebi.ac.uk/pride/ws/archive/project/' + dataset
         req = http.request('GET', url)
         dataset_meta = json.loads(req.data.decode("utf8"))
+        if dataset_meta["code"] == 500:
+            print("PRIDE Server Error, cannot add data right now")
+            return
+
         dataset_entry = Dataset(
             accession=dataset_meta["accession"],
             title=dataset_meta["title"]
