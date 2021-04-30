@@ -9,7 +9,12 @@ from .schema import *
 class DatabaseBackend:
     def __init__(self, database_path, backoffs=100):
         self.database_path = database_path
+        self.engine = create_engine(self.database_path, poolclass=NullPool)
+        self.session = scoped_session(sessionmaker(bind=self.engine))
         self.backoffs = 100
+
+    def __del__(self):
+        self.session.remove()
 
     def _backoff(self):
         yield True
@@ -19,14 +24,8 @@ class DatabaseBackend:
 
         yield False
 
-    def create_engine(self):
-        return create_engine(self.database_path, poolclass=NullPool)
-
-    def create_session(self):
-        return scoped_session(sessionmaker(bind=self.create_engine()))
-
     def initialize_database(self):
-        with self.create_engine().connect() as connection:
+        with self.engine.connect() as connection:
             try:
                 PhosphopediaBase.metadata.create_all(
                     connection
@@ -35,17 +34,15 @@ class DatabaseBackend:
                 print("Database locked, ignoring initialization check.")
 
     def safe_add(self, obj):
-        session = self.create_session()
         while self._backoff():
             try:
-                session.add(obj)
-                session.commit()
-                session.remove()
+                self.session.add(obj)
+                self.session.commit()
+                self.session.remove()
                 return True
             except OperationalError:
-                session.rollback()
+                self.session.rollback()
 
-        session.remove()
         return False
 
     def safe_run(self, func):

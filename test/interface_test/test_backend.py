@@ -5,13 +5,14 @@ from multiprocessing.pool import Pool
 from interfaces import backend, schema
 
 
-def new_dataset(ind, database):
+def new_dataset(ind, db_path): #, database):
     """Utility function to add single fake dataset to database"""
 
     str_ind = str(ind)
     accession = "LOC" + "0"*(6-len(str_ind)) + str_ind
     test_entry = schema.Dataset(accession=accession,
                                 title="Test " + str_ind)
+    database = backend.DatabaseBackend(db_path)
     database.safe_add(test_entry)
 
 
@@ -25,7 +26,7 @@ class TestDatabaseInit(unittest.TestCase):
             database = backend.DatabaseBackend(test_db_path)
             database.initialize_database()
 
-            engine = database.create_engine()
+            engine = database.engine
             for name, cls in schema.__dict__.items():
                 if isinstance(cls, type) and hasattr(cls, "__tablename__"):
                     self.assertTrue(
@@ -40,15 +41,12 @@ class TestDatabaseInit(unittest.TestCase):
             database = backend.DatabaseBackend(test_db_path)
             database.initialize_database()
 
-            new_dataset(1, database)
+            new_dataset(1, test_db_path) #, database)
 
             # Get entry back
-            session = database.create_session()
-            query = session.query(schema.Dataset)
+            query = database.session.query(schema.Dataset)
             retrieved_entry = database.safe_run(query.one)
             self.assertEqual(int(retrieved_entry.accession[3:]), 1)
-
-            session.remove()
 
     def test_update_parallel(self):
         """Test database updates over multiple processes"""
@@ -59,13 +57,11 @@ class TestDatabaseInit(unittest.TestCase):
             database.initialize_database()
 
             with Pool() as pool:
-                pool.starmap(new_dataset, [(ind, database) for ind in range(100)])
+                pool.starmap(new_dataset, [(ind, test_db_path) for ind in range(100)])
 
             # Get all entries back
-            session = database.create_session()
-            query = session.query(schema.Dataset).order_by(schema.Dataset.accession)
+            query = database.session.query(schema.Dataset).order_by(schema.Dataset.accession)
             retrieved_entries = database.safe_run(query.all)
             for ind, entry in enumerate(retrieved_entries):
                 self.assertEqual(int(entry.accession[3:]), ind)
 
-            session.remove()
