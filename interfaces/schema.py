@@ -28,15 +28,16 @@ class Sample(PhosphopediaBase):
     __tablename__ = "sample"
 
     id = Column(Integer, primary_key=True)
-    parentDataset = Column(String(9), ForeignKey("dataset.accession"))
+    parentDataset = Column(String(9), 
+                           ForeignKey("dataset.accession"))
     sampleName = Column(String(100))
+    fileType = Column(String(4))
     fileName = Column(String(100))
-    fileSize = Column(Integer)
     fileLocation = Column(String(250))
 
     def __repr__(self):
-        return "<Sample(id={}, sampleName='{}', fileName='{}')>".format(
-            self.id, self.sampleName, self.fileName
+        return "<Sample(id={}, sampleName='{}', fileType='{}')>".format(
+            self.id, self.sampleName, self.fileType
         )
 
 Dataset.samples = relationship("Sample", order_by=Sample.id)

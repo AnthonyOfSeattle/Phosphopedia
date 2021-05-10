@@ -1,5 +1,7 @@
 import unittest
 import tempfile
+import ppx
+import os
 from interfaces import backend, schema, update
 
 
@@ -48,3 +50,29 @@ class TestDatasetManager(unittest.TestCase):
                                    .order_by(schema.Sample.sampleName)
             sample_entries = database.safe_run(sample_query.all)
             self.assertEqual(len(sample_entries), nfiles)
+
+    def test_remote_update(self):
+        """Test remote connection to ProteomeXchange"""
+
+        prev_wd = os.getcwd()
+        with tempfile.TemporaryDirectory() as temp_path:
+            os.chdir(temp_path)
+            test_db_path = "sqlite:///" + temp_path + "/phosphopedia.db"
+            database = backend.DatabaseBackend(test_db_path)
+            database.initialize_database()
+
+            print()
+            accession = "PXD001492"
+            manager = update.DatasetManager(test_db_path)
+            manager.add_datasets([accession])
+
+            # Make sure all files added
+            project = ppx.find_project(accession, local=temp_path)
+            nfiles = len(project.remote_files("*.raw"))
+            sample_query = database.session\
+                                   .query(schema.Sample)\
+                                   .order_by(schema.Sample.sampleName)
+            sample_entries = database.safe_run(sample_query.all)
+            self.assertEqual(len(sample_entries), nfiles)
+
+            os.chdir(prev_wd)
