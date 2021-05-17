@@ -66,7 +66,7 @@ class DatasetManager:
         if self.database.safe_run(dataset_query.count) == 0:
             print("==> {} not in database, adding now".format(accession))
             dataset = Dataset(accession=accession,
-                              title=accession)
+                              title=project.title)
 
         else:
             print("==> {} already present in database, updating files".format(accession))
