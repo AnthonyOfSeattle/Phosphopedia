@@ -9,6 +9,7 @@ from .schema import Dataset, Sample
 class DatasetManager:
     def __init__(self, database_path):
         self.database = DatabaseBackend(database_path)
+        self.database.initialize_database()
 
     def _add_local_dataset(self, path, filter_str):
         # Check if dataset is already in database

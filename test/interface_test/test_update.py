@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import ppx
 import os
-from interfaces import backend, schema, update
+from interfaces import schema, update
 
 
 class TestDatasetManager(unittest.TestCase):
@@ -11,8 +11,6 @@ class TestDatasetManager(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_path:
             test_db_path = "sqlite:///" + temp_path + "/phosphopedia.db"
-            database = backend.DatabaseBackend(test_db_path)
-            database.initialize_database()
 
             # Add fake raw files to database
             nfiles = 100
@@ -24,10 +22,11 @@ class TestDatasetManager(unittest.TestCase):
             manager.add_datasets([temp_path])
 
             # Make sure all files added
-            sample_query = database.session\
-                                   .query(schema.Sample)\
-                                   .order_by(schema.Sample.sampleName)
-            sample_entries = database.safe_run(sample_query.all)
+            sample_query = manager.database\
+                                  .session\
+                                  .query(schema.Sample)\
+                                  .order_by(schema.Sample.sampleName)
+            sample_entries = manager.database.safe_run(sample_query.all)
             self.assertEqual(len(sample_entries), nfiles)
 
             # Add more fake raw files
@@ -39,16 +38,18 @@ class TestDatasetManager(unittest.TestCase):
             manager.add_datasets([temp_path])
 
             # Make sure dataset only added once and new files added
-            dataset_query = database.session\
-                                    .query(schema.Dataset)\
-                                    .filter(schema.Dataset.title == temp_path.split("/")[-1])
-            dataset_entries = database.safe_run(dataset_query.all)
+            dataset_query = manager.database\
+                                   .session\
+                                   .query(schema.Dataset)\
+                                   .filter(schema.Dataset.title == temp_path.split("/")[-1])
+            dataset_entries = manager.database.safe_run(dataset_query.all)
             self.assertEqual(len(dataset_entries), 1)
 
-            sample_query = database.session\
-                                   .query(schema.Sample)\
-                                   .order_by(schema.Sample.sampleName)
-            sample_entries = database.safe_run(sample_query.all)
+            sample_query = manager.database\
+                                  .session\
+                                  .query(schema.Sample)\
+                                  .order_by(schema.Sample.sampleName)
+            sample_entries = manager.database.safe_run(sample_query.all)
             self.assertEqual(len(sample_entries), nfiles)
 
     def test_remote_update(self):
@@ -58,8 +59,6 @@ class TestDatasetManager(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_path:
             os.chdir(temp_path)
             test_db_path = "sqlite:///" + temp_path + "/phosphopedia.db"
-            database = backend.DatabaseBackend(test_db_path)
-            database.initialize_database()
 
             print()
             accession = "PXD001492"
@@ -69,10 +68,11 @@ class TestDatasetManager(unittest.TestCase):
             # Make sure all files added
             project = ppx.find_project(accession, local=temp_path)
             nfiles = len(project.remote_files("*.raw"))
-            sample_query = database.session\
-                                   .query(schema.Sample)\
-                                   .order_by(schema.Sample.sampleName)
-            sample_entries = database.safe_run(sample_query.all)
+            sample_query = manager.database\
+                                  .session\
+                                  .query(schema.Sample)\
+                                  .order_by(schema.Sample.sampleName)
+            sample_entries = manager.database.safe_run(sample_query.all)
             self.assertEqual(len(sample_entries), nfiles)
 
             os.chdir(prev_wd)
