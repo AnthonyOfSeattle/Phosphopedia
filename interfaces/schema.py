@@ -67,6 +67,18 @@ class Error(PhosphopediaBase):
             self.sampleId, self.errorCode
         )
 
+class Flag(PhosphopediaBase):
+
+    __tablename__ = "flag"
+
+    sampleId = Column(Integer, primary_key=True)
+    flagCode = Column(String(10), primary_key=True)
+
+    def __repr__(self):
+        return "<Flag(sampleId={}, flagCode='{}')>".format(
+            self.sampleId, self.flagCode
+        )
+
 #########################
 #                       #
 # Identification tables #

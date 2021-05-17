@@ -2,8 +2,9 @@ import os
 import re
 import ppx
 import glob
+import pandas as pd
 from .backend import DatabaseBackend
-from .schema import Dataset, Sample
+from .schema import Dataset, Sample, Error, Flag
 
 
 class DatasetManager:
@@ -34,6 +35,7 @@ class DatasetManager:
         # Check for files in path
         file_list = [os.path.split(f)[-1] for f in glob.glob(os.path.join(path, "*.raw"))]
         file_list = [f for f in file_list if re.search(filter_str, f) is not None]
+        file_list.sort()
         
         # Add files if not present
         for file_name in file_list:
@@ -76,6 +78,7 @@ class DatasetManager:
         # Check for files in remote
         file_list = project.remote_files("*.raw")
         file_list = [f for f in file_list if re.search(filter_str, f) is not None]
+        file_list.sort()
 
         # Add files if not present
         for file_name in file_list:
@@ -113,3 +116,75 @@ class DatasetManager:
                     )
 
             print("==> Success: {} added to database".format(entry[0]))
+
+
+class SampleManager:
+    def __init__(self, database_path):
+        self.database = DatabaseBackend(database_path)
+
+    def lookup_id(self, parent_dataset, sample_name):
+        query = self.database\
+                    .session\
+                    .query(Sample.id)\
+                    .filter(Sample.parentDataset == parent_dataset)\
+                    .filter(Sample.sampleName == sample_name)
+
+        return self.database.safe_run(query.one)[0]
+
+    def add_error(self, sample_id, error_code):
+        error = Error(sampleId = sample_id,
+                      errorCode = error_code)
+
+        self.database.safe_add(error)
+
+    def add_flag(self, sample_id, flag_code):
+        flag = Flag(sampleId = sample_id,
+                    flagCode = flag_code)
+
+        self.database.safe_add(flag)
+
+    def get_sample(self, sample_id):
+        query = self.database\
+                    .session\
+                    .query(Sample)\
+                    .filter(Sample.id == sample_id)
+
+        return self.database.safe_run(query.one)
+
+    def get_sample_manifest(self, exclude_errors=True):
+        query = self.database\
+                    .session\
+                    .query(Sample.id,
+                           Sample.sampleName,
+                           Sample.parentDataset)
+
+        if exclude_errors:
+            query = query.outerjoin(Error, Sample.id == Error.sampleId)\
+                         .filter(Error.errorCode == None)
+
+        sample_manifest = pd.DataFrame(
+            self.database.safe_run(query.all),
+            columns = ["id", "sampleName", "parentDataset"]
+        )
+
+        return sample_manifest
+        
+    def get_incomplete_samples(self, flag_code):
+        flag_query = self.database\
+                         .session\
+                         .query(Flag.sampleId, Flag.flagCode)\
+                         .filter(Flag.flagCode == flag_code)
+
+        flag_df = pd.DataFrame(
+            self.database.safe_run(flag_query.all),
+            columns = ["sampleId", "flagCode"]
+        )
+
+        sample_manifest = self.get_sample_manifest()
+        sample_manifest = sample_manifest.join(flag_df.set_index("sampleId"),
+                                               how="left",
+                                               on="id")
+        sample_manifest = sample_manifest[sample_manifest.flagCode.isna()]
+        sample_manifest = sample_manifest.drop("flagCode", axis=1)        
+
+        return sample_manifest
