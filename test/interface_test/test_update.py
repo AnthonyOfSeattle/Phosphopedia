@@ -2,7 +2,7 @@ import unittest
 import tempfile
 import ppx
 import os
-from interfaces import schema, update
+from interfaces import schema, managers
 
 
 class TestDatasetManager(unittest.TestCase):
@@ -18,7 +18,7 @@ class TestDatasetManager(unittest.TestCase):
                 open(temp_path + f"/file_{ind}.raw", "w").close()
 
             print()
-            manager = update.DatasetManager(test_db_path)
+            manager = managers.DatasetManager(test_db_path)
             manager.add_datasets([temp_path])
 
             # Make sure all files added
@@ -62,7 +62,7 @@ class TestDatasetManager(unittest.TestCase):
 
             print()
             accession = "PXD001492"
-            manager = update.DatasetManager(test_db_path)
+            manager = managers.DatasetManager(test_db_path)
             manager.add_datasets([accession])
 
             # Make sure all files added
