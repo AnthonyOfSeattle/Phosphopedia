@@ -3,8 +3,9 @@ import re
 import ppx
 import glob
 import pandas as pd
+from sqlalchemy.orm.exc import NoResultFound
 from .backend import DatabaseBackend
-from .schema import Dataset, Sample, Error, Flag
+from .schema import Dataset, Sample, Error, Flag, Parameters
 
 
 class DatasetManager:
@@ -142,6 +143,26 @@ class SampleManager:
                     flagCode = flag_code)
 
         self.database.safe_add(flag)
+
+    def get_parameters(self, sample_id):
+        query = self.database\
+                    .session\
+                    .query(Parameters)\
+                    .filter(Parameters.sampleId == sample_id)
+
+        return self.database.safe_run(query.one)
+
+    def add_mass_analyzers(self, sample_id, ms1_analyzer, ms2_analyzer):
+        try:
+            params = self.get_parameters(sample_id)
+            params.ms1Analyzer = ms1_analyzer
+            params.ms2Analyzer = ms2_analyzer
+        except NoResultFound as e:
+            params = Parameters(sampleId = sample_id,
+                                ms1Analyzer = ms1_analyzer,
+                                ms2Analyzer = ms2_analyzer)
+
+        self.database.safe_add(params)
 
     def get_sample(self, sample_id):
         query = self.database\

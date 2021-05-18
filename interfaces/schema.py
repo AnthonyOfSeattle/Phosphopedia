@@ -51,7 +51,7 @@ class Parameters(PhosphopediaBase):
     ms2Analyzer = Column(String(10))
 
     def __repr__(self):
-        return "<Parameter(sampleId={}, ms1Analyzer='{}', ms2Analyzer='{}')>".format(
+        return "<Parameters(sampleId={}, ms1Analyzer='{}', ms2Analyzer='{}')>".format(
             self.sampleId, self.ms1Analyzer, self.ms2Analyzer
         )
 
