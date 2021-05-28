@@ -1,12 +1,15 @@
+import re
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+import time
+import shutil
+import ppx
+import numpy as np
+import pandas as pd
+from glob import glob
 from snakemake.utils import makedirs, listfiles
-from sqlalchemy.exc import OperationalError
 
+from interfaces import *
 from integration_engine import *
-include: "interfaces/sqlite_interface.py"
-include: "interfaces/database_interface.py"
 
 SNAKEMAKE_DIR = os.path.dirname(workflow.snakefile)
 WORKING_DIR = os.getcwd()
@@ -15,16 +18,52 @@ DATABASE_PATH = "sqlite:///" + os.path.join(WORKING_DIR, "phosphopedia.db")
 ##### load config #####
 configfile: "config/config.yaml"
 
+##### utility functions #####
+
+def add_sample_error(accession, sample_name, error_code):
+    manager = SampleManager(DATABASE_PATH)
+    sample_id = manager.lookup_id(accession, sample_name)
+    manager.add_error(sample_id, error_code)
+
+def add_sample_flag(accession, sample_name, flag_code):
+    manager = SampleManager(DATABASE_PATH)
+    sample_id = manager.lookup_id(accession, sample_name)
+    manager.add_flag(sample_id, flag_code)
+
 ##### target rules #####
 
-localrules: all, clean_pipeline, clean_search, finalize_search, finalize_preprocessing, group_proteins, update_database
+localrules:
+    all,
+    integration_checkpoint,
+    group_proteins,
+    search_checkpoint,
+    preprocessing_checkpoint, 
+    update_database
+
+def clean_temp_files():
+    shutil.rmtree(".ppx_cache", ignore_errors=True)
+    shutil.rmtree(".pipeline_flags", ignore_errors=True)
+
+onsuccess:
+    clean_temp_files()
+
+onerror:
+    clean_temp_files()
 
 rule all:
     input:
-        "flags/database_flags/database_updated.flag",
-        "flags/preprocess_flags/preprocess.complete",
-        "flags/search_flags/search.complete",
-        "flags/integration_flags/integration.complete",
+        ".pipeline_flags/database.updated",
+        ".pipeline_flags/preprocess.complete",
+        ".pipeline_flags/search.complete",
+        ".pipeline_flags/integration.complete",
+
+checkpoint update_database:
+    output:
+        touch(".pipeline_flags/database.updated")
+    run:
+        manager = DatasetManager(DATABASE_PATH)
+        manager.add_datasets(config["datasets"])
+
 
 ##### load rules #####
 include: "rules/preprocess_data.smk"
