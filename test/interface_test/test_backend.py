@@ -3,7 +3,7 @@ import os
 import tempfile
 from multiprocessing.pool import Pool
 from interfaces import backend, schema
-
+from sqlalchemy import inspect
 
 def new_dataset(ind, db_path): #, database):
     """Utility function to add single fake dataset to database"""
@@ -30,7 +30,7 @@ class TestDatabaseInit(unittest.TestCase):
             for name, cls in schema.__dict__.items():
                 if isinstance(cls, type) and hasattr(cls, "__tablename__"):
                     self.assertTrue(
-                        engine.dialect.has_table(engine, cls.__tablename__)
+                        inspect(engine).has_table(cls.__tablename__)
                         )
 
     def test_update(self):
