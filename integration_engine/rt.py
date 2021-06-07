@@ -19,10 +19,10 @@ class AugmentedLinearRegression(LinearRegression):
 class AugmentedIsotonicRegression(IsotonicRegression):
     def invert(self, X, y):
         indices = np.minimum(
-            np.searchsorted(self._necessary_y_, y), 
-            len(self._necessary_y_) - 1
+            np.searchsorted(self.y_thresholds_, y), 
+            len(self.y_thresholds_) - 1
         )
-        delta = self._necessary_y_[indices] - self._necessary_X_[indices]
+        delta = self.y_thresholds_[indices] - self.X_thresholds_[indices]
         return y - delta
     
     def get_input_grad(self, X, y):
