@@ -38,7 +38,18 @@ class DatabaseBackend:
             try:
                 self.session.add(obj)
                 self.session.commit()
-                self.session.remove()
+                return True
+            except OperationalError:
+                self.session.rollback()
+
+        return False
+
+    def safe_add_bulk(self, obj, records):
+        while self._backoff():
+            try:
+                self.session.execute(obj.__table__.insert(),
+                                     records)
+                self.session.commit()
                 return True
             except OperationalError:
                 self.session.rollback()

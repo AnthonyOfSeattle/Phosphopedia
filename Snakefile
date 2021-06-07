@@ -56,6 +56,7 @@ rule all:
         ".pipeline_flags/preprocess.complete",
         ".pipeline_flags/search.complete",
         ".pipeline_flags/integration.complete",
+        ".pipeline_flags/upload.complete"
 
 checkpoint update_database:
     output:
@@ -69,3 +70,4 @@ checkpoint update_database:
 include: "rules/preprocess_data.smk"
 include: "rules/database_search.smk"
 include: "rules/psm_integration.smk"
+include: "rules/upload_data.smk"
