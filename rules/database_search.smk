@@ -5,16 +5,15 @@
 ##############################
 
 rule comet_param_builder:
-    input:
-        ancient("flags/preprocess_flags/preprocess.complete")
     output:
         "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"
     group:
         "comet"
     run:
-        params = DatabaseInterface(DATABASE_PATH).get_sample_params(
-            sample_name = wildcards.sampleName
-        )
+        sample_manager = SampleManager(DATABASE_PATH)
+        sample_id = sample_manager.lookup_id(wildcards.parentDataset,
+                                             wildcards.sampleName)
+        params = sample_manager.get_parameters(sample_id)
 
         param_lines = []
         for key, value in config["comet"]["params"].items():
@@ -31,8 +30,8 @@ rule comet_param_builder:
 rule comet_search:
     input:
         mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML",
-        parameter_file = ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.params"),
-        ref = ancient("config/" + config["comet"]["ref"])
+        parameter_file = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.params",
+        ref = "config/" + config["comet"]["ref"]
     output:
         pin = "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
     params:
@@ -56,17 +55,15 @@ rule comet_search:
                    {input.mzml} {input.ref}
         """
 
-
 ###############################
 #                             #
 # PSM scoring with Percolator #
 #                             #
 ###############################
 
-
 rule percolator_pin_builder:
     input:
-        ancient("comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin")
+        "comet/{parentDataset}/{sampleName}/{sampleName}.comet.target.pin"
     output:
         "percolator/{parentDataset}/{sampleName}/{sampleName}.pin"
     params:
@@ -78,7 +75,7 @@ rule percolator_pin_builder:
 
 rule percolator_scoring:
     input:
-        ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.pin")
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.pin"
     output:
         "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.pep.xml",
         "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.decoy.pep.xml",
@@ -104,25 +101,24 @@ rule percolator_scoring:
                         {input}
         """
 
-
 ############################################################
 #                                                          #
 # Localize phosphorylations in target peptides with Ascore #
 #                                                          #
 ############################################################
 
-
 rule ascore_param_builder:
     input:
-        ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt")
+        "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.target.psms.txt"
     output:
         "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params"
     group:
         "ascore"
     run:
-        params = DatabaseInterface(DATABASE_PATH).get_sample_params(
-            sample_name = wildcards.sampleName
-        )
+        sample_manager = SampleManager(DATABASE_PATH)
+        sample_id = sample_manager.lookup_id(wildcards.parentDataset,
+                                             wildcards.sampleName)
+        params = sample_manager.get_parameters(sample_id)
 
         param_lines = []
         for key, value in config["ascore"]["params"].items():
@@ -139,8 +135,8 @@ rule ascore_param_builder:
 rule ascore_localization:
     input:
         mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML"),
-        percolator_ids = ancient("percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt"),
-        parameter_file = ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params")
+        percolator_ids = "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
+        parameter_file = "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.params"
     output:
         "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt"
     conda:
@@ -151,13 +147,12 @@ rule ascore_localization:
         "ascore"
     shell:
         """
-        python -m pyascore --parameter_file {input.parameter_file} \
-                           --ident_file_type percolatorTXT \
-                           {input.mzml} \
-                           {input.percolator_ids} \
-                           {output}
+        pyascore --parameter_file {input.parameter_file} \
+                 --ident_file_type percolatorTXT \
+                 {input.mzml} \
+                 {input.percolator_ids} \
+                 {output}
         """
-
 
 ###########################################
 #                                         #
@@ -165,32 +160,35 @@ rule ascore_localization:
 #                                         #
 ###########################################
 
-
-rule clean_search:
+rule finalize_search:
     input:
-        ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.target.txt"),
-        ancient("ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.decoy.txt")
+        "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.target.txt",
+        "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.decoy.txt"
     output:
-        touch("flags/search_flags/{parentDataset}/{sampleName}.search.complete")
-    params:
-        raw = "samples/{parentDataset}/{sampleName}/{sampleName}.raw",
-        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML"
-    shell:
-        """
-        if [ -f {params.raw} ]; then echo rm {params.raw}; fi
-        if [ -f {params.mzml} ]; then echo rm {params.mzml}; fi
-        """
+        touch(".pipeline_flags/{parentDataset}/{sampleName}/search.complete")
+    run:
+        raw = "samples/{parentDataset}/{sampleName}/{sampleName}.raw".format(**wildcards)
+        if os.path.isfile(raw):
+            os.remove(raw)
+        
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML".format(**wildcards)
+        if os.path.isfile(mzml):
+            os.remove(mzml)
+
+        add_sample_flag(wildcards.parentDataset,
+                        wildcards.sampleName,
+                        "searchComplete")
 
 def evaluate_search_samples(wildcards):
-    checkpoints.finalize_preprocessing.get(**wildcards)
+    checkpoints.preprocessing_checkpoint.get(**wildcards)
     return expand(
-               "flags/search_flags/{parentDataset}/{sampleName}.search.complete", zip,
-               **DatabaseInterface(DATABASE_PATH).get_sample_manifest()
-           )
+        ".pipeline_flags/{parentDataset}/{sampleName}/search.complete", zip,
+        **SampleManager(DATABASE_PATH).get_incomplete_samples("searchComplete")
+        )
 
-checkpoint finalize_search:
+checkpoint search_checkpoint:
     input:
         evaluate_search_samples
     output:
-        touch("flags/search_flags/search.complete")
+        touch(".pipeline_flags/search.complete")
 

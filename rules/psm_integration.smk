@@ -1,17 +1,29 @@
-protein_group_filename = os.path.split(config["comet"]["ref"])[1]
-protein_group_filename = ".".join(protein_group_filename.split(".")[:-1]) + ".protein_groups"
+###################################################
+#                                                 #
+# Split proteins into mutally disconnected groups #
+#                                                 #
+###################################################
+
+def get_protein_group_filename():
+    base_filename = os.path.split(config["comet"]["ref"])[1]
+    group_filename = ".".join(
+        base_filename.split(".")[:-1] + ["protein_groups", "json"]
+    )
+
+    return os.path.join("integration_engine", group_filename)
+
 rule group_proteins:
     input:
-        ref = "config/" + config["comet"]["ref"],
-        flag = ancient("flags/search_flags/search.complete")
+        ref = "config/" + config["comet"]["ref"]
     output:
-        group_file = "integration_engine/" + protein_group_filename
+        group_file = get_protein_group_filename()
     run:
         # List percolator files
-        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
+        sample_manifest = SampleManager(DATABASE_PATH).get_sample_manifest()
         percolator_files = expand(
             expand(
-                "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", zip, **sample_manifest
+                "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", 
+                zip, **sample_manifest
             ), psmLabel=["target", "decoy"]
         )
         percolator_files.sort()
@@ -21,14 +33,18 @@ rule group_proteins:
         pg.group(percolator_files)
         pg.to_json(output.group_file)
 
+########################################
+#                                      #
+# Integrate PSMs into final detections #
+#                                      #
+########################################
 
 rule subintegration:
     input:
         ref = "config/" + config["comet"]["ref"],
-        group_file = "integration_engine/" + protein_group_filename,
-        flag = ancient("flags/search_flags/search.complete")
+        group_file = get_protein_group_filename()
     output:
-        flag = touch("flags/integration_flags/subintegration_{groupNumber}.complete"),
+        flag = touch(".pipeline_flags/subintegration/subintegration_{groupNumber}.complete"),
         psms = "integration_engine/subintegration/group_{groupNumber}/psms.csv",
         peptides = "integration_engine/subintegration/group_{groupNumber}/peptides.csv",
         peptide_modifications = "integration_engine/subintegration/group_{groupNumber}/peptide_modifications.csv",
@@ -40,31 +56,35 @@ rule subintegration:
     benchmark:
         "benchmarks/integration_manager/subintegration_{groupNumber}.benchmark.txt"
     run:
-        from glob import glob
-
         # List files which contain scan information
-        sample_manifest = DatabaseInterface(DATABASE_PATH).get_sample_manifest()
-        scan_info_files = 2 * expand(
-            "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv", zip, **sample_manifest
-        )
-        scan_info_files.sort()
+        scan_info_files = []
+        percolator_files = []
+        ascore_files = []
+        sample_manifest = SampleManager(DATABASE_PATH).get_sample_manifest()
+        for file_ind in range(sample_manifest.shape[0]):
+            file_info = sample_manifest.iloc[file_ind, :]
+            
+            scan_info_files.extend(
+              2 * ["samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv".format(**file_info)]
+            )
 
-        # List percolator files
-        percolator_files = expand(
-            expand(
-                "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{{psmLabel}}.psms.txt", zip, **sample_manifest
-            ), psmLabel=["target", "decoy"]
-        )
-        percolator_files.sort()
+            percolator_files.extend(
+                expand(
+                    "percolator/{parentDataset}/{sampleName}/{sampleName}.percolator.{psmLabel}.psms.txt",
+                    psmLabel=["target", "decoy"],
+                    **file_info
+                )
+            )
 
-        # List corresponding ascore files
-        ascore_files = expand(
-            expand(
-                "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{{psmLabel}}.txt", zip, **sample_manifest
-            ), psmLabel=["target", "decoy"]
-        )
-        ascore_files.sort()
-
+            ascore_files.extend(
+                expand(
+                    "ascore/{parentDataset}/{sampleName}/{sampleName}.ascore.{psmLabel}.txt",
+                    psmLabel=["target", "decoy"],
+                    **file_info
+                )
+           )
+        
+        # Feed files to subintegration     
         manager = SubintegrationManager(
             nworkers=8, file_chunk_size=1e3, record_chunk_size=1e4
         )
@@ -101,10 +121,9 @@ rule subintegration:
 
 rule finalize_integration:
     input:
-        expand("flags/integration_flags/subintegration_{groupNumber}.complete",
+        expand(".pipeline_flags/subintegration/subintegration_{groupNumber}.complete",
                groupNumber = range(config["integration"]["ngroups"]))
     output:
-        touch("flags/integration_flags/integration.complete"),
         psms = "integration_engine/psms.csv",
         peptides = "integration_engine/peptides.csv",
         peptide_modifications = "integration_engine/peptide_modifications.csv",
@@ -132,3 +151,24 @@ rule finalize_integration:
                                      lr=1e-2,
                                      max_epochs=25)
         rt_calculator.process_path("integration_engine/")
+
+##############################################
+#                                            #
+# Write output state to finalize integration #
+#                                            #
+##############################################
+
+def wait_on_search(wildcards):
+    checkpoints.search_checkpoint.get(**wildcards)
+    return ["integration_engine/psms.csv",
+            "integration_engine/peptides.csv",
+            "integration_engine/peptide_modifications.csv",
+            "integration_engine/proteins.csv",
+            "integration_engine/peptide_protein.csv",
+            "integration_engine/sites.csv"]
+
+checkpoint integration_checkpoint:
+    input:
+        wait_on_search
+    output:
+        touch(".pipeline_flags/integration.complete")
