@@ -135,7 +135,8 @@ class BuildUploader:
                           )\
                     .loc[:, ["idSite", "idProtein", 
                              "position", "residue",
-                             "qvalue"]]
+                             "qvalue"]]\
+                    .rename({"qvalue" : "fdr"}, axis=1)
 
         # To remove, explicit filter for STY
         sites = sites[sites.residue.str.contains("[STY]", regex=True)]
