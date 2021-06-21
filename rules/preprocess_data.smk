@@ -10,8 +10,6 @@ rule obtain_data:
     params:
         output_path="samples/{parentDataset}/{sampleName}/",
         download_error = "samples/{parentDataset}/{sampleName}/download.error"
-    group:
-        "preprocess"
     run:
         manager = SampleManager(DATABASE_PATH)
         sample_id = manager.lookup_id(wildcards.parentDataset,
@@ -27,8 +25,9 @@ rule obtain_data:
                 os.symlink(os.path.join(sample.fileLacation, sample.fileName),
                            output[0])
         except Exception as e:
-            open(output[0]).close()
-            open(params.download_error).close()
+            print("Error occured while downloading file:", e)
+            open(output[0], "w").close()
+            open(params.download_error, "w").close()
 
 rule raw_to_mzml:
     input:
@@ -41,15 +40,15 @@ rule raw_to_mzml:
         "benchmarks/raw_to_mzml/{parentDataset}/{sampleName}.benchmark.txt"
     params:
         conversion_error = "samples/{parentDataset}/{sampleName}/conversion.error"
-    group:
-        "preprocess"
     shell:
         """
-        trap "touch {output} {params.conversion_error}; exit 0" ERR
-
-        ThermoRawFileParser.sh -i {input} \
-                               -b {output} \
-                               -f 2
+        {{
+            ThermoRawFileParser.sh -i {input} \
+                                   -b {output} \
+                                   -f 2
+        }} || {{
+            touch {output} {params.conversion_error}
+        }}
         """
 
 ###################################
@@ -94,8 +93,6 @@ rule extract_scan_information:
         "samples/{parentDataset}/{sampleName}/{sampleName}.mzML"
     output:
         "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv"
-    group:
-        "preprocess"
     run:
         from pyteomics.mzml import MzML
 
@@ -128,8 +125,8 @@ rule extract_scan_information:
         sample_id = sample_manager.lookup_id(wildcards.parentDataset, 
                                              wildcards.sampleName)
         sample_manager.add_mass_analyzers(sample_id,
-                                          global_data["ms1_analyzer"], 
-                                          global_data["ms2_analyzer"])
+                                          global_data.get("ms1_analyzer", ""), 
+                                          global_data.get("ms2_analyzer", ""))
         pd.DataFrame(scan_data).to_csv(output[0], sep="\t", index=False)
 
 ################################################
@@ -147,8 +144,6 @@ rule finalize_preprocessing:
     params:
         download_error = "samples/{parentDataset}/{sampleName}/download.error",
         conversion_error = "samples/{parentDataset}/{sampleName}/conversion.error"
-    group:
-        "preprocess"
     run:
         if os.path.isfile(params.download_error) or os.path.isfile(params.conversion_error):
             add_sample_error(wildcards.parentDataset,

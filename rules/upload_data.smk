@@ -1,12 +1,15 @@
+def wait_on_integration(wildcards):
+    checkpoints.integration_checkpoint.get(**wildcards)
+    return ["integration_engine/psms.csv",
+            "integration_engine/peptides.csv",
+            "integration_engine/peptide_modifications.csv",
+            "integration_engine/proteins.csv",
+            "integration_engine/peptide_protein.csv",
+            "integration_engine/sites.csv"]
+
 rule upload_data:
     input:
-        ".pipeline_flags/integration.complete",
-        psms = "integration_engine/psms.csv",
-        peptides = "integration_engine/peptides.csv",
-        peptide_modifications = "integration_engine/peptide_modifications.csv",
-        proteins = "integration_engine/proteins.csv",
-        peptide_protein = "integration_engine/peptide_protein.csv",
-        sites = "integration_engine/sites.csv"
+        wait_on_integration
     output:
         touch(".pipeline_flags/upload.complete")
     params:

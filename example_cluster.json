@@ -8,14 +8,14 @@
         "eNo"       : "{WORKING_DIR}/eNo/",
     },
 
-    "peprocess" :
+    "raw_to_mzml" :
     {
-        "ncores" : "8"
+        "ncores" : "4"
     },
 
-    "idfree_qc" :
+    "extract_scan_information" :
     {
-        "resources" : "mfree=2G,h_rt=00:30:00",
+        "ncores" : "4"
     },
 
     "comet" :

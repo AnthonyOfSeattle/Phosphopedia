@@ -37,6 +37,7 @@ localrules:
     integration_checkpoint,
     group_proteins,
     search_checkpoint,
+    finalize_search,
     preprocessing_checkpoint, 
     update_database
 
