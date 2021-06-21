@@ -160,11 +160,10 @@ class Site(PhosphopediaBase):
     fdr = Column(Numeric(precision=10,   
                          scale=8,
                          asdecimal=False))
-    grade = Column(String(1))
 
     def __repr__(self):
-        return "<Site(idSite = {}, idProtein = {}, site = {})>".format(
-            self.idSite, self.idProtein, self.site
+        return "<Site(idSite = {}, idProtein = {}, position = {})>".format(
+            self.idSite, self.idProtein, self.position
         )
 
 class Pathway(PhosphopediaBase):
