@@ -12,4 +12,4 @@ dependencies:
   - pyteomics=4.4
   - snakemake=6.3
   - pip:
-    - ppx=1.0.0
+    - ppx=1.1.0
