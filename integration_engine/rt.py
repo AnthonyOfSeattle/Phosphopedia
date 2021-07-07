@@ -33,7 +33,7 @@ class AugmentedIsotonicRegression(IsotonicRegression):
 
 
 class RTAligner:
-    def __init__(self, base_regressor, br_kws={}, method="min", lr=1e-1, max_epochs=50):
+    def __init__(self, base_regressor, br_kws={}, method="min", lr=1e-1, max_epochs=10):
         # Store regressor class and any keywords to be initialized later
         self._base_regressor = base_regressor
         self._br_kws = br_kws          
@@ -164,8 +164,8 @@ class RTAligner:
             model.fit(p, target, weight)
 
     def fit(self, X = None, pep_ids = None, sample_names = None, method=None):
-        if all([X is not None, pep_ids is not None, sample_names is not None]):
-            self._initialize_params(X, pep_ids, sample_names)
+        assert all([X is not None, pep_ids is not None, sample_names is not None])
+        self._initialize_params(X, pep_ids, sample_names)
             
         method = method if method is not None else self._method
         assert method in ("min", "descent")
