@@ -27,9 +27,10 @@ rule group_proteins:
             ), psmLabel=["target", "decoy"]
         )
         percolator_files.sort()
-        pg = PercolatorProteinGrouper(n_groups = config["integration"]["ngroups"], 
-                                      n_workers = 8, 
-                                      chunk_size=1e3)
+        pg = PercolatorProteinGrouper(n_groups=config["integration"]["ngroups"], 
+                                      n_workers=8, 
+                                      chunk_size=1e3,
+                                      fdr_filter=config["integration"]["fdr_filter"])
         pg.group(percolator_files)
         pg.to_json(output.group_file)
 
@@ -85,9 +86,11 @@ rule subintegration:
            )
         
         # Feed files to subintegration     
-        manager = SubintegrationManager(
-            nworkers=8, file_chunk_size=1e3, record_chunk_size=1e4
-        )
+        manager = SubintegrationManager(nworkers=8, 
+                                        file_chunk_size=1e3, 
+                                        record_chunk_size=1e4,
+                                        fdr_filter=config["integration"]["fdr_filter"]
+                                       )
 
         t0 = time.time()
         manager.map_psms(

@@ -49,3 +49,4 @@ ascore:
 
 integration:
   ngroups: 1
+  fdr_filter: .1
