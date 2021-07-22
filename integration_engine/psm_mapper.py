@@ -7,12 +7,15 @@ import pandas as pd
 class PSMMapper:
 
     @staticmethod
-    def initialize(protein_groups, group_number):
+    def initialize(protein_groups, group_number, fdr_filter):
         global PROTEIN_GROUPS
         PROTEIN_GROUPS = protein_groups
 
         global GROUP_NUMBER
         GROUP_NUMBER = group_number
+
+        global FDR_FILTER
+        FDR_FILTER = fdr_filter
 
     @staticmethod
     def gather_data(scan_info_path, psm_path, localization_path):
@@ -27,6 +30,7 @@ class PSMMapper:
                                  .sort_values(["scan", "percolator score"])\
                                  .set_index("scan", drop=False)
         psm_scores = psm_scores.drop_duplicates(subset="scan", keep="last")
+        psm_scores = psm_scores[psm_scores["percolator q-value"] <= FDR_FILTER]
 
         select = []
         for prot_list in psm_scores["protein id"]:
