@@ -14,11 +14,12 @@ from .modification_mapper import *
 from .database_schema import *
 
 class SubintegrationManager:
-    def __init__(self, nworkers = 8, file_chunk_size = 1e3, record_chunk_size = 1e4, db_path=None):
+    def __init__(self, nworkers = 8, file_chunk_size = 1e3, record_chunk_size = 1e4, fdr_filter = 1., db_path=None):
         # Processing parameters
         self.nworkers = nworkers
         self.file_chunk_size = int(file_chunk_size)
         self.record_chunk_size = int(record_chunk_size)
+        self.fdr_filter = fdr_filter
 
         # Initialize in memory database
         if db_path is None:
@@ -57,10 +58,10 @@ class SubintegrationManager:
 
         workers = Pool(self.nworkers,
                        PSMMapper.initialize,
-                       [protein_groups, group_number])
+                       [protein_groups, group_number, self.fdr_filter])
 
         # Iterate through files in chunks
-        psm_counter = count()
+        psm_counter = count(1)
         session = self._get_session()
         for chunk_start in range(0, len(psm_files), self.file_chunk_size):
             chunk_end = min(len(psm_files), chunk_start + self.file_chunk_size)
