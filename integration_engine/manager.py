@@ -61,7 +61,7 @@ class SubintegrationManager:
                        [protein_groups, group_number, self.fdr_filter])
 
         # Iterate through files in chunks
-        psm_counter = count()
+        psm_counter = count(1)
         session = self._get_session()
         for chunk_start in range(0, len(psm_files), self.file_chunk_size):
             chunk_end = min(len(psm_files), chunk_start + self.file_chunk_size)
