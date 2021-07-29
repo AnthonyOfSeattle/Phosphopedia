@@ -14,7 +14,7 @@ class PercolatorReader:
             psm_path, sep="\t",
             usecols=["scan", "percolator q-value", "protein id"]
             ).set_index("scan")
-        psm_map = psm_map[psm_map["percolator q-value"] < fdr_filter]
+        psm_map = psm_map[psm_map["percolator q-value"] <= fdr_filter]
 
         protein_groups = []
         for prot_list in psm_map["protein id"]:
