@@ -177,10 +177,11 @@ class BuildUploader:
             )
 
         # Match peptide sites to real sites
+        # To Fix: Should be right join
         peptide_sites = peptide_sites.join(
             self.sites.set_index(["idProtein", "position"]),
             on = ["prot_id", "localized_pos"],
-            how = "right"
+            how = "inner"
             )
         peptide_sites = peptide_sites.loc[
             :, ["idPeptide", "idSite", "score"]
