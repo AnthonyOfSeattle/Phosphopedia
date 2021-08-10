@@ -158,7 +158,7 @@ class Protein(PhosphopediaBase):
     description = Column(String(200))
 
     def __repr__(self):
-        return "<Site(idProtein = {}, reference = '{}')>".format(
+        return "<Protein(idProtein = {}, reference = '{}')>".format(
             self.idProtein, self.reference
         )
 
