@@ -39,16 +39,20 @@ rule raw_to_mzml:
     benchmark:
         "benchmarks/raw_to_mzml/{parentDataset}/{sampleName}.benchmark.txt"
     params:
+        tmp_dir = "/tmp/{parentDataset}/{sampleName}/",
         conversion_error = "samples/{parentDataset}/{sampleName}/conversion.error"
     shell:
         """
+        mkdir -p {params.tmp_dir} 
+        cp {input} {params.tmp_dir}/tmp.raw
         {{
-            ThermoRawFileParser.sh -i {input} \
+            ThermoRawFileParser.sh -i {params.tmp_dir}/tmp.raw \
                                    -b {output} \
                                    -f 2
         }} || {{
             touch {output} {params.conversion_error}
         }}
+        rm -r {params.tmp_dir}
         """
 
 ###################################
@@ -137,8 +141,8 @@ rule extract_scan_information:
 
 rule finalize_preprocessing:
     input:
-        scan_info = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv"),
-        mzml = ancient("samples/{parentDataset}/{sampleName}/{sampleName}.mzML")
+        scan_info = "samples/{parentDataset}/{sampleName}/{sampleName}.scan_info.tsv",
+        mzml = "samples/{parentDataset}/{sampleName}/{sampleName}.mzML"
     output:
         touch(".pipeline_flags/{parentDataset}/{sampleName}/preprocess.complete")
     params:
