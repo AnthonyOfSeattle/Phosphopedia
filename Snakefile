@@ -45,6 +45,9 @@ def clean_temp_files():
     shutil.rmtree(".ppx_cache", ignore_errors=True)
     shutil.rmtree(".pipeline_flags", ignore_errors=True)
 
+onstart:
+    ErrorCleaner(WORKING_DIR, DATABASE_PATH).clean()
+
 onsuccess:
     clean_temp_files()
 
