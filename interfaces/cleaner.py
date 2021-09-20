@@ -13,7 +13,8 @@ class ErrorCleaner:
             self.active = True
 
     def _is_error(self):
-        error_query = self.database.session.query(Error)
+        error_query = self.database.session.query(Error)\
+                                           .filter(Error.errorCode != "manualError")
         try:
             error_count = error_query.count()
         except OperationalError:
@@ -43,7 +44,8 @@ class ErrorCleaner:
                                                   Sample.parentDataset,
                                                   Sample.sampleName,
                                                   Error.errorCode)\
-                                           .filter(Sample.id == Error.sampleId)
+                                           .filter(Sample.id == Error.sampleId,
+                                                   Error.errorCode != "manualError")
         errors = self.database.safe_run(error_query.all)
         for e in errors:
             try:
