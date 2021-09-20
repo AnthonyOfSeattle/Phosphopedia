@@ -35,7 +35,6 @@ def add_sample_flag(accession, sample_name, flag_code):
 localrules:
     all,
     integration_checkpoint,
-    group_proteins,
     search_checkpoint,
     finalize_search,
     preprocessing_checkpoint, 
