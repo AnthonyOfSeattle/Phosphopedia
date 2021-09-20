@@ -59,8 +59,11 @@ class DatabaseBackend:
     def safe_run(self, func):
         while self._backoff():
             try:
-                return func()
+                result = func()
+                self.session.commit()
+                return result
             except OperationalError:
+                self.session.rollback()
                 continue
 
         OperationalError()

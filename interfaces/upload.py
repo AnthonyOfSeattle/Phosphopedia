@@ -278,6 +278,7 @@ class BuildUploader:
             if table is None:
                 continue
 
+            print("Dropping from: " + name)
             drop_query = self.database.session.query(obj).delete
             self.database.safe_run(drop_query)
             print("Uploading: " + name)
