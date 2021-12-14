@@ -53,7 +53,7 @@ class FDRCalculator:
             peptides.score.values, peptides.label.values
         )
 
-        print("Sorting PSMs by ID...")
+        print("Sorting Peptides by ID...")
         peptides.sort_values("id", inplace=True, ascending=True)
 
         print("Dumping Peptides...")
